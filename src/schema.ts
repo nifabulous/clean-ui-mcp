@@ -438,7 +438,10 @@ export const VisualAttributes = z.object({
   // route are exhausted for it), so authoring must be able to decline rather
   // than guess. Absence must never be rendered as the negative claim.
   usesShadows: z.boolean().nullable(),
-  usesBorders: z.boolean(),
+  // Nullable means the authoring/tagger lane can decline when the screenshot
+  // does not provide enough evidence. `false` remains a real measured claim;
+  // null is unknown, never a fabricated negative.
+  usesBorders: z.boolean().nullable(),
 });
 
 /**

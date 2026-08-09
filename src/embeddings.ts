@@ -299,7 +299,7 @@ export function entryToDocument(entry: {
     spacingDensity: string;
     cornerStyle:    string;
     usesShadows:    boolean | null;
-    usesBorders:    boolean;
+    usesBorders:    boolean | null;
   };
 }): string {
   // Embedding document for semantic search + similarity.
@@ -334,7 +334,9 @@ export function entryToDocument(entry: {
     entry.visual.usesShadows == null
       ? ""
       : entry.visual.usesShadows ? "Uses shadows for depth." : "No shadows; depth via other means.",
-    entry.visual.usesBorders ? "Borders used for structure." : "No borders.",
+    entry.visual.usesBorders == null
+      ? ""
+      : entry.visual.usesBorders ? "Borders used for structure." : "No borders.",
   ].filter(Boolean).join(" ");
 
   const colorAttrs = [

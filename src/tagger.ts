@@ -223,7 +223,7 @@ export interface TaggerOutput {
     spacingDensity: string;
     cornerStyle:    string;
     usesShadows:    boolean | null;
-    usesBorders:    boolean;
+    usesBorders:    boolean | null;
   };
   critique:        string;
   whatToSteal:     string[];
@@ -1094,10 +1094,10 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}.
                            // Example: "Settings / Integrations" -> domainTags:["integrations"].
                            // Leave [] if there's no clear business-domain signal.
   "colorScheme": "",       // ONE from: light, dark. The page-level background theme.
-  "industryVertical": "",  // ONE industry the product belongs to (fintech, devtools, healthcare,
-                           // e-commerce, media, education, enterprise-saas, consumer-social,
-                           // productivity, security, ai-ml, crypto, real-estate, legal, travel).
-                           // Infer from product name, copy, visual language. Leave "" if unclear.
+  "industryVertical": "",  // ONE industry the visible page context supports (fintech, devtools,
+                           // healthcare, e-commerce, media, education, enterprise-saas,
+                           // consumer-social, productivity, security, ai-ml, crypto, real-estate,
+                           // legal, travel). Use visible copy/navigation only; leave "" if unclear.
   "responsiveBehavior": "",// ONE from: responsive, fixed-width, adaptive. Whether the layout
                            // adapts to viewport. "responsive" = fluid grid that reflows; "fixed-width"
                            // = centered max-width container that doesn't reflow; "adaptive" =
@@ -1108,8 +1108,8 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}.
   "bodyFont": null,        // if DOM signals provide fontFamily, use that name — do not contradict
   "spacingDensity": "",    // one of: compact, moderate, spacious. If DOM signals provide fontSize/gap, use them to inform density.
   "cornerStyle": "",       // one of: sharp, slight-round, pill, mixed. If DOM signals provide borderRadius, use it.
-  "usesShadows": false,    // if DOM signals provide boxShadow, non-null = shadows present
-  "usesBorders": false,    // true if borders/dividers are used for layout structure
+  "usesShadows": null,     // if DOM signals provide boxShadow, non-null = shadows present; null if unknown
+  "usesBorders": null,     // true if borders/dividers are used for layout structure; null if unclear
   "colorRoles": null,      // {canvas, surface, ink, muted, accent} — map dominantColors to semantic
                            // roles (what each is FOR). This IS a judgment call. Omit if unsure.
   "layoutForm": "",        // ONE from: ${LAYOUT_FORMS.join(", ")}. Omit if not structural.
@@ -1119,7 +1119,8 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}.
 
 Rules:
 - dominantColors and accentColor MUST come from the supplied quantizedColors list. Never invent a hex.
-- If any enum field's correct value isn't listed, choose the closest listed value — never invent.
+- If an enum field is not supported by visible evidence, return its empty-string/null/[] shape;
+  never force a closest label merely to fill the schema.
 - Components are visible evidence, not product intent. Include chart/card/list/navigation controls
   actually present in the screenshot. Prefer specific tags (donut-chart, line-chart, kpi-card)
   over generic chart/card terms when the specific component is visible. Do not add a component just
@@ -1289,7 +1290,7 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
   "voiceTone": "",             // omit entirely if no notable copy is visible
   "voiceExamples": [],         // real copy visible on screen, verbatim
   "voiceAvoid": [],            // what voice this design does NOT use
-  "qualityTier": "",            // ONE from: ${QUALITY_TIERS.join(", ")}. Default to "exceptional".
+  "qualityTier": "",            // ONE from: ${QUALITY_TIERS.join(", ")}. Return "" when quality cannot be judged.
                                // Use "cautionary" only when the screen's PRIMARY teaching value is
                                // failure: severe unreadability, deceptive patterns, broken task
                                // completion, or multiple compounding issues that make the design a
@@ -1330,7 +1331,7 @@ Rules:
 
 // ─── sanitizer helpers (unchanged from the single-pass era) ──────────────────
 
-function listFromAllowed(value: unknown, allowed: readonly string[], fallback: string[]): string[] {
+function listFromAllowed(value: unknown, allowed: readonly string[], fallback: string[] = []): string[] {
   if (!Array.isArray(value)) return fallback;
   const normalized = value
     .filter((item): item is string => typeof item === "string")
@@ -1518,7 +1519,7 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
   return result.slice(0, 2);
 }
 
-function hexColors(value: unknown, fallback: string[]): string[] {
+function hexColors(value: unknown, fallback: string[] = []): string[] {
   if (!Array.isArray(value)) return fallback;
   const colors = value
     .filter((item): item is string => typeof item === "string")
@@ -1529,7 +1530,7 @@ function hexColors(value: unknown, fallback: string[]): string[] {
   return unique.length ? unique : fallback;
 }
 
-function oneFromAllowed(value: unknown, allowed: readonly string[], fallback: string): string {
+function oneFromAllowed(value: unknown, allowed: readonly string[], fallback = ""): string {
   return typeof value === "string" && allowed.includes(value) ? value : fallback;
 }
 
@@ -1555,7 +1556,9 @@ function stringOrNull(value: unknown): string | null {
 }
 
 function text(value: unknown, fallback = ""): string {
-  return typeof value === "string" ? value.trim() : fallback;
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed || fallback;
 }
 
 function booleanValue<F extends boolean | null>(value: unknown, fallback: F): boolean | F {
@@ -1591,7 +1594,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   spacingDensity: string;
   cornerStyle: string;
   usesShadows: boolean | null;
-  usesBorders: boolean;
+  usesBorders: boolean | null;
   draftCritique: string;
   draftWhatToSteal: string[];
   draftAntiPatterns: string[];
@@ -1647,44 +1650,44 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
       }
     : undefined;
 
-  const patternType = oneFromAllowed(parsed.patternType, PATTERN_TYPES, "dashboard");
+  const patternType = oneFromAllowed(parsed.patternType, PATTERN_TYPES);
   const suggestedPatternType = normalizeSuggestedPatternType(parsed.suggestedPatternType, patternType);
 
   return {
     patternType,
     suggestedPatternType,
-    categories: listFromAllowed(parsed.categories, CATEGORIES, ["dashboard"]),
-    styleTags: listFromAllowed(parsed.styleTags, STYLE_TAGS, ["minimal"]),
+    categories: listFromAllowed(parsed.categories, CATEGORIES),
+    styleTags: listFromAllowed(parsed.styleTags, STYLE_TAGS),
     components: componentsFromAllowed(parsed.components),
     domainTags: domainTagsFromAllowed(parsed.domainTags),
     colorScheme: oneFromAllowed(parsed.colorScheme, ["light", "dark"], ""),
     industryVertical: text(parsed.industryVertical).slice(0, 40),
     responsiveBehavior: oneFromAllowed(parsed.responsiveBehavior, ["responsive", "fixed-width", "adaptive"], ""),
     mood: text(parsed.mood).slice(0, 60),
-    dominantColors: hexColors(parsed.dominantColors, ["#ffffff", "#111111"]),
+    dominantColors: hexColors(parsed.dominantColors),
     accentColor: nullableHex(parsed.accentColor),
     colorRoles,
     displayFont: stringOrNull(parsed.displayFont),
     bodyFont: stringOrNull(parsed.bodyFont),
     typographyNotes: text(parsed.typographyNotes),
-    spacingDensity: oneFromAllowed(parsed.spacingDensity, SPACING_DENSITIES, "moderate"),
-    cornerStyle: oneFromAllowed(parsed.cornerStyle, CORNER_STYLES, "slight-round"),
+    spacingDensity: oneFromAllowed(parsed.spacingDensity, SPACING_DENSITIES),
+    cornerStyle: oneFromAllowed(parsed.cornerStyle, CORNER_STYLES),
     // An absent model answer stays absent. Coalescing to `false` turned "the
     // model did not say" into "there are no shadows" — a positive claim the
     // model never made, written straight into the served corpus. The field is
     // `gated`, so nothing downstream will ever adjudicate that guess.
     usesShadows: booleanValue(parsed.usesShadows, null),
-    usesBorders: booleanValue(parsed.usesBorders, true),
-    draftCritique: text(parsed.draftCritique, "This UI needs a human review, but the screenshot shows a clear structure worth cataloging for future design reference."),
+    usesBorders: booleanValue(parsed.usesBorders, null),
+    draftCritique: text(parsed.draftCritique, "[DRAFT — REWRITE] This critique needs a human rewrite grounded in the screenshot."),
     layout,
     voice,
-    qualityTier: oneFromAllowed(parsed.qualityTier, QUALITY_TIERS, "exceptional"),
+    qualityTier: oneFromAllowed(parsed.qualityTier, QUALITY_TIERS),
     tierChangeJustification: typeof parsed.tierChangeJustification === "string" && parsed.tierChangeJustification.trim()
       ? parsed.tierChangeJustification.trim()
       : undefined,
     draftWhatToSteal: textList(parsed.draftWhatToSteal).length
       ? textList(parsed.draftWhatToSteal)
-      : ["Review the screenshot and extract one concrete interface technique before saving."],
+      : ["[DRAFT] Review the screenshot and extract one concrete interface technique before saving."],
     draftAntiPatterns: textList(parsed.draftAntiPatterns).length
       ? textList(parsed.draftAntiPatterns)
       : ["[DRAFT] Review the screenshot and name one common UI mistake this design avoids."],
@@ -3071,8 +3074,11 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       layout:          extraction.layout,
       businessRationale: undefined,
       voice:           undefined,
-      qualityTier:     "exceptional",
-      qualityScore:    3,
+      // Extraction-only has no editorial quality evidence. Leave the fields
+      // invalid so a caller cannot accidentally persist a fabricated tier;
+      // the draft markers still make the intended review state explicit.
+      qualityTier:     "",
+      qualityScore:    0,
       addedAt:         today,
       provenance:      { taggedBy: "auto" }, // tagger produced; flips to auto-reviewed when a human edits+approves
       _raw: {
@@ -3202,7 +3208,10 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     voice:           critique.voice,
     mood:            critique.mood || undefined,
     qualityTier:     critique.qualityTier,
-    qualityScore:    critique.qualityTier === "cautionary" ? 2 : 3,
+    // An absent/invalid tier must not silently become exceptional. A zero score
+    // deliberately fails CorpusEntry validation until a curator/model supplies
+    // a valid quality tier.
+    qualityScore:    critique.qualityTier === "cautionary" ? 2 : critique.qualityTier === "exceptional" ? 3 : 0,
     tierChangeJustification: critique.tierChangeJustification,
     addedAt:         today,
     provenance:      { taggedBy: "auto" }, // two-pass tagger output; human review flips to auto-reviewed
@@ -3304,7 +3313,7 @@ export async function generateCritique(
     businessRationale: critique.businessRationale,
     voice: critique.voice,
     qualityTier: critique.qualityTier,
-    qualityScore: critique.qualityTier === "cautionary" ? 2 : 3,
+    qualityScore: critique.qualityTier === "cautionary" ? 2 : critique.qualityTier === "exceptional" ? 3 : 0,
     typographyNotes: critique.typographyNotes || "",
     mood: critique.mood || undefined,
     _raw: { critique: critiqueParsed },

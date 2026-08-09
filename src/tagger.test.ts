@@ -29,14 +29,15 @@ describe("tagger sanitization", () => {
     expect(sanitized.domainTags).toEqual(["billing", "usage"]);
     expect(sanitized.dominantColors).toEqual(["#abcdef", "#111111"]);
     expect(sanitized.accentColor).toBeNull();
-    expect(sanitized.spacingDensity).toBe("moderate");
+    expect(sanitized.spacingDensity).toBe("");
     expect(sanitized.cornerStyle).toBe("pill");
     // Was `toBe(false)`. Rejecting an unusable value used to mean falling back to
     // `false`, which turned "the model answered `"yes"`, which is not a boolean"
     // into the positive claim "this UI has no shadows" — written to the corpus and
     // served. `usesShadows` is `gated`, so nothing downstream would ever catch it.
     // Rejection now yields null: absence, not a negated claim. `usesBorders` keeps
-    // its `true` fallback because it remains model-verifiable.
+    // `usesBorders` also declines on an unusable answer rather than inventing a
+    // positive claim.
     expect(sanitized.usesShadows).toBeNull();
     expect(sanitized.usesBorders).toBe(false);
   });
@@ -395,15 +396,21 @@ describe("tagger sanitization", () => {
     expect(sanitized.draftAccessibilityRisks[0].evidence).toBe("small red/green dots beside Paid and Failed rows");
   });
 
-  it("supplies useful defaults for unusable model output", () => {
+  it("does not fabricate canonical values for unusable model output", () => {
     const sanitized = sanitizeTaggerPayload({});
 
-    expect(sanitized.categories).toEqual(["dashboard"]);
-    expect(sanitized.styleTags).toEqual(["minimal"]);
+    expect(sanitized.patternType).toBe("");
+    expect(sanitized.categories).toEqual([]);
+    expect(sanitized.styleTags).toEqual([]);
     expect(sanitized.components).toEqual([]);
-    expect(sanitized.dominantColors).toEqual(["#ffffff", "#111111"]);
-    expect(sanitized.draftCritique.length).toBeGreaterThan(80);
-    expect(sanitized.draftWhatToSteal[0].length).toBeGreaterThan(10);
+    expect(sanitized.dominantColors).toEqual([]);
+    expect(sanitized.spacingDensity).toBe("");
+    expect(sanitized.cornerStyle).toBe("");
+    expect(sanitized.usesBorders).toBeNull();
+    expect(sanitized.qualityTier).toBe("");
+    expect(sanitized.draftCritique).toMatch(/^\[DRAFT/);
+    expect(sanitized.draftWhatToSteal[0]).toMatch(/^\[DRAFT/);
+    expect(sanitized.draftAntiPatterns[0]).toMatch(/^\[DRAFT/);
   });
 
   it("keeps complete businessRationale objects and drops incomplete ones", () => {
@@ -983,7 +990,7 @@ describe("tagImage two-pass request shape", () => {
     await tagImage({ imagePath: testImage, productName: "Test", url: null });
 
     const pass2Prompt = String(calls[1].body.input?.[1]?.content?.[0]?.text ?? "");
-    expect(pass2Prompt).toContain('Default to "exceptional"');
+    expect(pass2Prompt).toContain('Return "" when quality cannot be judged');
     expect(pass2Prompt).toContain('Use "cautionary" only when');
     expect(pass2Prompt).toContain("Keep otherwise strong designs exceptional");
     expect(pass2Prompt).not.toContain('Mark "cautionary" when ANY');

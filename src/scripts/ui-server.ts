@@ -546,55 +546,6 @@ export function entryIssues(error: unknown): string[] {
   return [describeError(error)];
 }
 
-// Server-side draft-marker stripper. Mirrors the classic workbench's
-// stripDraftMarker: removes "[DRAFT — …] ", "[DRAFT] ", "[PLACEHOLDER] ",
-// "[TODO] " prefixes from any string. The tagger emits these as editing
-// affordances; /api/auto-retag strips them so a fresh retag lands as clean
-// text (the user rewrites later) — without weakening the draft-hygiene gate
-// that applies to manual edits via PUT.
-const DRAFT_PREFIX_RE = /\[(?:DRAFT|PLACEHOLDER|TODO)[^\]]*\]\s*/gi;
-function stripDraftPrefix(s: string): string {
-  return typeof s === "string" ? s.replace(DRAFT_PREFIX_RE, "") : s;
-}
-/** Strip draft markers from a single a11y risk (structured object with canonical WCAG IDs). */
-function stripDraftFromRisk(risk: CorpusEntryT["antiPatterns"]["accessibilityRisks"][number]): typeof risk {
-  return {
-    ...risk,
-    element: stripDraftPrefix(risk.element),
-    risk: stripDraftPrefix(risk.risk),
-    evidence: stripDraftPrefix(risk.evidence),
-    wcag: risk.wcag,
-  };
-}
-function stripDraftMarkersFromEntry(entry: CorpusEntryT): CorpusEntryT {
-  const e = { ...entry };
-  e.critique = stripDraftPrefix(e.critique);
-  e.whatToSteal = e.whatToSteal.map(stripDraftPrefix);
-  if (e.antiPatterns) {
-    e.antiPatterns = {
-      antiPatterns: e.antiPatterns.antiPatterns.map(stripDraftPrefix),
-      whereThisFails: e.antiPatterns.whereThisFails.map(stripDraftPrefix),
-      accessibilityRisks: e.antiPatterns.accessibilityRisks.map(stripDraftFromRisk),
-      legacyAccessibilityNotes: e.antiPatterns.legacyAccessibilityNotes.map(stripDraftPrefix),
-    };
-  }
-  if (e.voice) {
-    e.voice = {
-      tone: stripDraftPrefix(e.voice.tone),
-      examples: e.voice.examples.map(stripDraftPrefix),
-      avoid: e.voice.avoid.map(stripDraftPrefix),
-    };
-  }
-  if (e.businessRationale) {
-    e.businessRationale = {
-      ...e.businessRationale,
-      targetUser: stripDraftPrefix(e.businessRationale.targetUser),
-      rationale: stripDraftPrefix(e.businessRationale.rationale),
-    };
-  }
-  return e;
-}
-
 // ─── DOM signals reader ─────────────────────────────────────────────────────
 // Reads the dom-signals.json sidecar for a batch-captured image. Only batch
 // captures (images under images-private/captures/{batchId}/) have signals;
@@ -635,7 +586,10 @@ function readDomSignalsForImage(corpusRelativeImagePath: string): DomSignals | n
   return sidecar[captureId] ?? null;
 }
 
-export function validateEntryPayload(payload: unknown): CorpusEntryT {
+export function validateEntryPayload(
+  payload: unknown,
+  opts: { allowDraftMarkers?: boolean } = {},
+): CorpusEntryT {
   const result = CorpusEntry.safeParse(payload);
   if (!result.success) {
     throw Object.assign(new Error("Entry validation failed"), { issues: result.error.issues });
@@ -646,25 +600,30 @@ export function validateEntryPayload(payload: unknown): CorpusEntryT {
   if (result.data.provenance?.capture?.mode === "group-member") {
     result.data.businessRationale = undefined;
   }
-  // Draft-hygiene gate: reject entries carrying [DRAFT]/[PLACEHOLDER]/[TODO]
-  // markers anywhere in their text fields. Uses the centralized check so the
-  // rule is identical to validate-corpus and commit-draft.
+  // Draft-hygiene gate: normal callers reject [DRAFT]/[PLACEHOLDER]/[TODO]
+  // markers. The only exception is the automatic retag path, which explicitly
+  // persists a reviewStatus:"draft" entry so its markers remain visible rather
+  // than being stripped into apparently approved prose.
   const dirty = findDraftMarkers(result.data);
-  if (dirty.length) {
+  const retainingDraft = opts.allowDraftMarkers === true && result.data.reviewStatus === "draft";
+  if (dirty.length && !retainingDraft) {
     throw Object.assign(new Error("Entry contains draft markers"), {
       issues: dirty.map((f) => ({ path: [f], message: `remove the [DRAFT]/[PLACEHOLDER]/[TODO] marker from ${f} before saving` })),
     });
   }
-  // Vague-phrase gate: reject generic filler in antiPatterns.antiPatterns.
-  // "keep it clean" is never a high-value statement — same severity as draft markers.
-  const vague = findVagueAntiPatterns(result.data);
-  if (vague.length) {
-    throw Object.assign(new Error("Entry contains generic filler"), {
-      issues: vague.map((v) => ({
-        path: [v.field],
-        message: `${v.issues[0]} — name the specific mistake this design avoids and the consequence of making it.`,
-      })),
-    });
+  // Vague-phrase gate: reject generic filler in committed prose. A retag draft
+  // is intentionally allowed to carry a placeholder because its review state
+  // and marker make the unfinished state explicit to curators and serving.
+  if (!retainingDraft) {
+    const vague = findVagueAntiPatterns(result.data);
+    if (vague.length) {
+      throw Object.assign(new Error("Entry contains generic filler"), {
+        issues: vague.map((v) => ({
+          path: [v.field],
+          message: `${v.issues[0]} — name the specific mistake this design avoids and the consequence of making it.`,
+        })),
+      });
+    }
   }
   return result.data;
 }
@@ -2123,7 +2082,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       // Title: keep the existing unless it's the placeholder template.
       const isPlaceholderTitle = /^\S+ — \(add descriptive subtitle\)/.test(entry.title);
       const merged: CorpusEntryT = {
-        ...entry, // preserves id, source, image, platform, addedAt, provenance, reviewStatus
+        ...entry, // preserves id, source, image, platform, addedAt, provenance
+        // Automatic retags are candidate content, never an approval action.
+        // Keep the explicit draft state alongside the tagger's [DRAFT] markers
+        // so a later UI edit/approval is required before serving.
+        reviewStatus: "draft",
         title: isPlaceholderTitle ? tagged.title : entry.title,
         patternType: tagged.patternType as CorpusEntryT["patternType"],
         patternDiscovery: (tagged.patternDiscovery ?? undefined) as CorpusEntryT["patternDiscovery"],
@@ -2153,16 +2116,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         qualityScore: entry.qualityScore,
       };
 
-      // Strip the tagger's [DRAFT]/[DRAFT — REWRITE] editing prefixes before
-      // validation — a bulk retag is meant to land fresh, clean text the user
-      // rewrites later, not [DRAFT]-gated text that the validator rejects.
-      const cleaned = stripDraftMarkersFromEntry(merged);
       // A retag re-runs the tagger over the SAME screenshot, so for a gated field
       // it can only produce another guess with no new evidence. Preserve the prior
       // value rather than overwrite it — the same call this path already makes for
       // qualityTier. Not a clear: whether to null the existing corpus's wrong
       // values is the spec's open decision, and a retag must not decide it.
-      const validated = preserveGatedFields(validateEntryPayload(cleaned), entry);
+      // Keep markers and placeholders intact. `allowDraftMarkers` is deliberately
+      // scoped to a reviewStatus:"draft" retag; manual saves remain fail-closed.
+      const validated = preserveGatedFields(validateEntryPayload(merged, { allowDraftMarkers: true }), entry);
       // Retag advances taggedAt — the content was freshly re-extracted.
       stampProvenance(validated, new Date().toISOString().slice(0, 10), "auto");
       // A retag re-extracts every value from the same screenshot, so a record kept

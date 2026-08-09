@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { Corpus, detectPlatform } from "../schema.js";
 import { writeAtomic, writeRawSnapshot } from "../persistence.js";
+import { carryMigrationVerification } from "./migration-carry.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
@@ -46,6 +47,7 @@ if (!parsed.success) {
 }
 
 const entries = parsed.data.entries;
+const priorEntries = structuredClone(entries);
 let fixed = 0;
 const counts: Record<string, number> = { web: 0, mobile: 0, tablet: 0 };
 
@@ -66,11 +68,12 @@ if (values["dry-run"]) {
 }
 
 // Re-validate the whole corpus after mutation, then write.
-const recheck = Corpus.safeParse({ version: 2, entries });
+const migratedEntries = carryMigrationVerification(entries, priorEntries);
+const recheck = Corpus.safeParse({ version: 2, entries: migratedEntries });
 if (!recheck.success) {
   console.error("Post-migration validation failed — aborting write:", recheck.error.issues.slice(0, 3));
   process.exit(1);
 }
 writeRawSnapshot(originalRaw);
-writeAtomic(CORPUS_PATH, JSON.stringify({ version: 2, entries }, null, 2) + "\n");
+writeAtomic(CORPUS_PATH, JSON.stringify({ version: 2, entries: migratedEntries }, null, 2) + "\n");
 console.log(`\n✅ Wrote ${entries.length} entries to ${CORPUS_PATH}.`);

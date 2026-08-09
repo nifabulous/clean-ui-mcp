@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { Corpus } from "../schema.js";
 import { writeAtomic, writeRawSnapshot } from "../persistence.js";
+import { carryMigrationVerification } from "./migration-carry.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
@@ -103,6 +104,7 @@ if (isMain) {
   const originalRaw = readFileSync(CORPUS_PATH, "utf-8");
   const raw = JSON.parse(originalRaw);
   const corpus = Corpus.parse(raw); // validates before we mutate
+  const priorEntries = structuredClone(corpus.entries);
 
   let populated = 0;
   let skipped = 0;
@@ -122,7 +124,8 @@ if (isMain) {
   }
 
   // Re-validate the mutated corpus before writing.
-  Corpus.parse({ version: 2, entries: corpus.entries });
+  const migratedEntries = carryMigrationVerification(corpus.entries, priorEntries);
+  Corpus.parse({ version: 2, entries: migratedEntries });
 
   if (values["dry-run"]) {
     console.log("\nDry run — no changes written.");
@@ -130,7 +133,7 @@ if (isMain) {
   }
 
   writeRawSnapshot(originalRaw);
-  writeAtomic(CORPUS_PATH, JSON.stringify({ version: 2, entries: corpus.entries }, null, 2) + "\n");
+  writeAtomic(CORPUS_PATH, JSON.stringify({ version: 2, entries: migratedEntries }, null, 2) + "\n");
   console.log(`\n✅ Wrote layouts to ${CORPUS_PATH}`);
 }
 

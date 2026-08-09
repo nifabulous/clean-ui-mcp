@@ -1,7 +1,7 @@
 // src/verify/calibration.test.ts
 import { describe, expect, it } from "vitest";
 import { fixtureManifest } from "./__fixtures__/fixtures.js";
-import { calibrate, assertGate, heldOutLock, heldOutHash } from "./calibration.js";
+import { calibrate, assertGate, assertPassingCalibration, heldOutLock, heldOutHash } from "./calibration.js";
 import { detectorRegistry } from "./detector-registry.js";
 
 describe("calibration gate", () => {
@@ -17,6 +17,17 @@ describe("calibration gate", () => {
     const tune = await calibrate(manifest, "tune");
     expect(tune.accuracy).toBeGreaterThanOrEqual(0);
     expect(tune.rows.length).toBeGreaterThan(0);
+  });
+
+  it("fails the calibration command when an enabled detector misses its floor", () => {
+    expect(() => assertPassingCalibration({
+      accuracy: 0,
+      decisiveRate: 0,
+      rows: [],
+      byField: {
+        platform: { accuracy: 0.5, decisiveRate: 1, total: 4, correct: 2, decisive: 4 },
+      },
+    }, detectorRegistry)).toThrow(/platform: accuracy 0\.50 \/ floor 0\.85/);
   });
 });
 

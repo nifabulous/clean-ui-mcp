@@ -1,7 +1,8 @@
 // src/verify/calibration-cli.ts
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { calibrate } from "./calibration.js";
+import { assertPassingCalibration, calibrate } from "./calibration.js";
+import { detectorRegistry } from "./detector-registry.js";
 
 // Real-set labels use the SPEC'S ONE labelling contract (spec: "Frozen labelled
 // ground-truth set"), not a second bespoke format. The spec defines that format
@@ -86,6 +87,7 @@ const manifest = {
 // Real labels carry their own absolute/relative paths — resolve them AS-IS,
 // never through the committed fixture directory.
 const result = await calibrate(manifest, "held-out", { imagePathFor: (f) => f.file });
+assertPassingCalibration(result, detectorRegistry);
 console.log(`Accuracy: ${(result.accuracy * 100).toFixed(1)}%  Decisive: ${(result.decisiveRate * 100).toFixed(1)}%`);
 for (const [field, f] of Object.entries(result.byField)) {
   console.log(`${field}: accuracy ${(f.accuracy * 100).toFixed(1)}%, decisive ${(f.decisiveRate * 100).toFixed(1)}%`);

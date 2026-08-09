@@ -50,9 +50,13 @@ describe("verifyEntry with the detector registry", () => {
     // affirmable recorded values — go back to the vision path.
     await verifyEntry(entry(), image, deps(prompts));
     const prompt = prompts[0] ?? "";
-    expect(prompt).toContain("visual.usesShadows");
     expect(prompt).toContain("visual.usesBorders");
     expect(prompt).toContain("visual.cornerStyle");
+    // usesShadows was asserted here until 2026-08-08, when it moved to `gated`.
+    // A disabled detector reverts a field to the VISION path, but a gated tier
+    // outranks that and removes it from the ask entirely — the two rules compose
+    // in that order, which is what this now pins.
+    expect(prompt).not.toContain("visual.usesShadows");
   });
 
   it("keeps a non-affirmable recorded false claim in the pending list", async () => {
@@ -60,8 +64,10 @@ describe("verifyEntry with the detector registry", () => {
     const image = fixtureImagePath("borders-flat-true");
     const e = entry({ visual: { ...entry().visual!, usesShadows: false, usesBorders: false } });
     await verifyEntry(e, image, deps(prompts));
-    expect(prompts[0] ?? "").toContain("visual.usesShadows");
     expect(prompts[0] ?? "").toContain("visual.usesBorders");
+    // usesShadows is gated as of 2026-08-08: a non-affirmable recorded claim
+    // stays pending only while its field is still asked at all.
+    expect(prompts[0] ?? "").not.toContain("visual.usesShadows");
   });
 
   it("excludes a contradicted field from the vision call", async () => {
@@ -79,8 +85,11 @@ describe("verifyEntry with the detector registry", () => {
     const image = fixtureImagePath("roles-card");
     await verifyEntry(entry(), image, { ...deps(prompts), detectors: false });
     const prompt = prompts[0] ?? "";
-    expect(prompt).toContain("visual.usesShadows");
     expect(prompt).toContain("visual.usesBorders");
     expect(prompt).toContain("visual.cornerStyle");
+    // --detectors off restores the legacy DETECTOR behaviour, not the legacy
+    // TIER table. usesShadows is gated, so it stays out of the ask under both
+    // flag states — the flag governs the detector lane, never the tier.
+    expect(prompt).not.toContain("visual.usesShadows");
   });
 });

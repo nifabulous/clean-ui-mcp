@@ -51,6 +51,7 @@
     "verify": "tsc && node dist/scripts/verify-corpus.js",
     "verify:dry-run": "tsc && node dist/scripts/verify-corpus.js --dry-run",
     "verify:estimate": "tsc && node dist/scripts/verify-corpus.js --estimate",
+    "backfill-pilot": "tsc && node dist/scripts/backfill-pilot.js",
     "eval-baseline": "tsc && node scripts/eval-baseline.mjs",
     "eval-matrix": "tsc && node scripts/eval-matrix.mjs",
     "benchmark-image-embeddings": "tsc && node scripts/benchmark-image-embeddings.mjs",

@@ -154,3 +154,44 @@ describe("whitelist contract — every 2d-2 enrichment key maps to an optionaliz
     }
   });
 });
+
+describe("gated reclassification — serving semantics survive the tier change", () => {
+  // accentColor, colorRoles and usesShadows moved to `gated` on 2026-08-08. The
+  // corpus holds 28 image-confirmed records across them. These pin that the
+  // reclassification changed what gets VERIFIED, not what gets SERVED.
+
+  it("keeps serving a record earned before the field was gated", () => {
+    // isVerified ignores verifierVersion and knows nothing about tiers, so a
+    // record outlives the reclassification. If this ever fails, gating silently
+    // revoked 28 entries' evidence.
+    const e = entryWith(["visual.accentColor"]);
+    const projected = projectEntryForSynthesis(e, ["visual.accentColor"]);
+    expect(projected.visual?.accentColor).toBe(e.visual?.accentColor);
+  });
+
+  it("omits an UNVERIFIED gated field from enrichment", () => {
+    const e = entryWith([]);
+    const projected = projectEntryForSynthesis(e, ["visual.accentColor"]);
+    expect(projected.visual && "accentColor" in projected.visual).toBe(false);
+  });
+
+  it("omits an unverified gated leaf without dropping a verified sibling", () => {
+    // The bug class this guards: wiping the `visual` container to remove one
+    // unverified leaf would take verified siblings with it.
+    const e = entryWith(["visual.usesBorders"]);
+    const projected = projectEntryForSynthesis(e, ["visual.accentColor", "visual.usesBorders"]);
+    expect(projected.visual && "accentColor" in projected.visual).toBe(false);
+    expect(projected.visual?.usesBorders).toBe(e.visual?.usesBorders);
+  });
+
+  it("treats all three reclassified fields the same way", () => {
+    const fields = ["visual.accentColor", "visual.colorRoles", "visual.usesShadows"];
+    const verified = projectEntryForSynthesis(entryWith(fields), fields);
+    const unverified = projectEntryForSynthesis(entryWith([]), fields);
+    for (const f of fields) {
+      const leaf = f.slice("visual.".length);
+      expect(verified.visual && leaf in verified.visual, `verified ${f}`).toBe(true);
+      expect(unverified.visual && leaf in unverified.visual, `unverified ${f}`).toBe(false);
+    }
+  });
+});

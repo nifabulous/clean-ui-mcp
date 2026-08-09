@@ -1,190 +1,131 @@
-# Task 1 Report — pinned text-model endpoints for every provider
+# Task 1 Report — Two-set `TrustGatedCorpusReader`
 
-Date: 2026-08-01
-Worktree: `/Users/olaniyi.oladokun/Downloads/clean-ui-mcp/.worktrees/c3-model-path`
-Commit: `ef2521f`
+**Branch:** `feat/field-set-gating`
+**Commit:** `9840b30` — "feat(trust): two-set TrustGatedCorpusReader — core gates, enrichment deferred to renderer"
+**Plan:** `docs/superpowers/plans/2026-08-06-field-set-gating-2d1.md` (Task 1)
+**Brief:** `.superpowers/sdd/task-1-brief.md`
 
-## Scope completed
+## What I implemented
 
-- Modified `src/tagger.ts`
-- Modified `src/c2/model-telemetry.test.ts`
-- Added `src/create-ui-spec-model-client.test.ts`
+In `src/corpus-trust-reader.ts`, replaced the single-set constructor, the `fields`
+field, and `passes` (the brief's stated `src/corpus-trust-reader.ts:34-62` range) with
+the brief's two-set implementation, verbatim:
 
-## RED evidence
+- New constructor signature: `(inner: CorpusReader, core: readonly string[], enrichment?: readonly string[])` with `enrichment` defaulting to `[]`.
+- Private storage `_core` / `_enrichment`, exposed via read-only getters `core` and `enrichment` (no public setter — read-only accessors).
+- Guards preserved: double-wrap refusal unchanged; the empty-set guard now keyed on `core.length === 0` with message "requires at least one core field".
+- `passes(entry)` now evaluates `this._core.every(...)` only — enrichment no longer gates inclusion.
+- All gated methods (`search`, `searchRanked`, `getById`, `findSimilar`, `entriesForAggregation`, `getImageIndex`) and ungated methods (`refusedForTrust`, `trustPosture`, taxonomy lists, `indexStatus`, `resolveImagePath`) untouched.
 
-Command:
+Also updated the class doc comment's field-set sentence so the prose matches the
+two-set reality: the paragraph now reads "against the CORE fields the tool
+hard-gates on (enrichment is projected at the render boundary). An entry is
+returned only when EVERY core field in the set is verified — the conservative
+reading, and the one that cannot over-serve."
 
-```bash
-npx vitest run src/c2/model-telemetry.test.ts src/create-ui-spec-model-client.test.ts
+No other files were modified (no `server-factory.ts` change).
+
+## TDD Evidence
+
+### RED
+
+**Command:** `npx vitest run src/corpus-trust-reader.test.ts` (with the five new
+tests appended, before implementing).
+
+**Output (abridged):**
+
+```
+× exposes core and enrichment as read-only accessors
+AssertionError: expected undefined to deeply equal [ 'critique' ]     ← r.core
+× refuses an empty CORE set at construction
+AssertionError: expected [Function] to throw error matching /at least one core field/i
+  Received: "TrustGatedCorpusReader requires at least one field; ..."
+Tests  2 failed | 21 passed (23)
 ```
 
-Observed failure excerpts before the production change:
+**Why expected:** the old single-set constructor:
+1. had no `core`/`enrichment` accessors (so `r.core` was `undefined`), and
+2. threw the old "at least one field" message, failing the new brief's
+   `/at least one core field/i` regex.
 
-```text
-FAIL  src/create-ui-spec-model-client.test.ts > ... > pins the explicit endpoint for OpenAI-compatible, Claude, and Gemini requests
-AssertionError: expected 'ambient-anthropic-key' to be 'request-key'
+The other three new tests passed at RED time because vitest transpiles without
+type-checking and the old constructor ignored the extra enrichment argument —
+not because the behavior existed. They still functioned as design checks, and the
+concat were confirmed GREEN after implementation.
+
+### GREEN
+
+**Command:** `npx vitest run src/corpus-trust-reader.test.ts`
+
+**Output:**
+
+```
+✓ src/corpus-trust-reader.test.ts (23 tests)
+Test Files  1 passed (1)
+     Tests  23 passed (23)
 ```
 
-```text
-FAIL  src/create-ui-spec-model-client.test.ts > ... > makes one failed pinned request without switching provider or model
-AssertionError: expected false to be true
+All 18 pre-existing tests still pass (single-set constructions default
+`enrichment` to `[]`, preserving byte-for-byte full-AND behavior) plus the 5 new
+core/enrichment tests.
+
+### Reconciliation: pre-existing test's regex (plan-internal inconsistency)
+
+The pre-existing test at `src/corpus-trust-reader.test.ts:228-230`
+("refuses an empty field set at construction") originally asserted the old
+message via `/at least one field/i`. The plan's new constructor message is
+"**at least one core field**"; the regex `/at least one field/i` does NOT match
+("core" sits between "one" and "field"). The plan (Global constraints + Task 1
+Step 3) mandates the new "core field" message, and the plan's own new test
+asserts `/at least one core field/i`. Correct resolution: update the pre-existing
+test to the plan's new wording — the error message stays exactly as the brief specifies. Done: `/at least one core field/i`.
+
+## TypeScript
+
+**Command:** `npx tsc --noEmit`
+
+**Not clean:** 4 errors, all in `src/server-factory.ts`:
+
+```
+src/server-factory.ts(161,51): error TS2339: Property 'fields' does not exist on type 'TrustGatedCorpusReader'.
+src/server-factory.ts(194,30): error TS2339: Property 'fields' does not exist on type 'TrustGatedCorpusReader'.
+src/server-factory.ts(219,78): error TS2339: Property 'fields' does not exist on type 'TrustGatedCorpusReader'.
+src/server-factory.ts(388,29): error TS2339: Property 'fields' does not exist on type 'TrustGatedCorpusReader'.
 ```
 
-```text
-FAIL  src/create-ui-spec-model-client.test.ts > ... > rejects a pinned Claude seed because the provider cannot honor it
-AssertionError: expected [Function] to throw error matching /seed/i but got 'fetch should not run'
-```
+These are the four `gate.fields` consumers (`emptyCorpusMessage`,
+`unresolvedIdsMessage`, `corpusEvidenceNote`, and the image-attach condition in
+`registerGetUiExample`). The plan's Global Constraints explicitly scope the
+compile gate: "TypeScript must compile (`npx tsc --noEmit`) **after Task 3** and
+at the end" — Task 1 ships the reader change that removes `fields`, and Task 3
+rewrites those four consumers onto `core`/`enrichment`. This is the expected
+intermediate state, not a regression introduced by Task 1. Per the task's "Do
+NOT modify any other files" constraint, `server-factory.ts` was left untouched.
 
-```text
-FAIL  src/c2/model-telemetry.test.ts > ... > honors endpoint.apiKey for Claude when the request pins explicit credentials
-AssertionError: expected 'anthropic-test' to be 'caller-supplied-key'
-```
+## Files changed
 
-Interpretation:
+- `src/corpus-trust-reader.ts` — two-set constructor + accessors + `passes`; doc-comment field-set sentence.
+- `src/corpus-trust-reader.test.ts` — appended 5-test `core/enrichment split (2d-1)` describe block; updated the 1 pre-existing empty-set regex to `at least one core field`.
 
-- Claude still preferred ambient credentials over the explicit request key.
-- Gemini still ignored the explicit pinned base URL.
-- Claude silently dropped `seed` instead of rejecting it.
+`git diff --stat`: 2 files, +96/-13.
 
-## GREEN evidence
+## Self-review findings
 
-Focused command:
+1. **Read-only accessors confirmed non-mutable:** `core`/`enrichment` are getters over `private readonly` backing arrays; no setter exported. The brief's "read-only accessors" requirement holds.
+2. **Default `enrichment = []` preserves old single-set semantics:** every existing full-AND construction passes through with `_enrichment = []`, verified by all 18 pre-existing tests remaining green.
+3. **Invariant intact:** `passes` still gates on `_core.every(...)` — no way for an unverified core field to pass; the "at least one core field" guard prevents the vacuous-`every` fail-open.
+4. **No dangling references to `fields` in the reader itself:** grep for `fields` in `corpus-trust-reader.ts` returns only the new `core`/`enrichment` JSDoc and the `_enrichment`/`core` accessor names. The four lingering `gate.fields` references are exclusively in `server-factory.ts`, owned by Task 3.
+5. **Test imports:** `CorpusReader` and `CorpusEntryT` were already imported in the test file; no import additions needed, and none were added.
 
-```bash
-npx vitest run src/c2/model-telemetry.test.ts src/create-ui-spec-model-client.test.ts
-```
+## Issues / concerns
 
-Focused result:
-
-```text
-Test Files  2 passed (2)
-Tests  23 passed (23)
-Duration  1.26s
-```
-
-Build / broader gate:
-
-```bash
-npm run build
-```
-
-Build result:
-
-```text
-check-public-site-boundary: PASS
-validate:c2-pilot: manifest up to date
-validate:c2-label-selection:schema: OK
-validate:c2-baseline: OK
-validate:c2-baseline-cases: All 22 baseline case packages passed
-generate-references: completed
-exit code: 0
-```
-
-## Implementation summary
-
-- Extended `ProviderCallOptions` with `apiKeyOverride`, `baseUrlOverride`, `temperatureOverride`, and `seedOverride`.
-- Extended `TextModelRequest` with optional `temperature` and `seed`.
-- Threaded explicit `endpoint.apiKey` and `endpoint.baseUrl` through the Claude and Gemini native call paths.
-- Preserved `undefined` base URL behavior via `??`, so omitted native base URLs still use their existing defaults.
-- Made blank explicit native API keys fail closed before any provider request succeeds with a blank credential.
-- Rejected pinned Claude `seed` values instead of silently dropping them.
-- Added focused tests for OpenAI-compatible, Claude, and Gemini request pinning plus the no-fallback failure case.
-
-## Self-review
-
-- The change stays additive to the production dispatch path: legacy `callTextModel` / `callModel` callers still fall back to provider env/default behavior when they do not supply explicit endpoint overrides.
-- The explicit C2-style path now pins credentials and base URLs for native providers the same way it already pinned model names and retry budgets.
-- I changed one existing C2 telemetry assertion because this branch still encoded the old ambient-key Claude behavior; the new assertion now matches the task brief's required contract.
-
-## Concerns
-
-- None blocking. The only notable wrinkle is the existing C2 test that had to be updated from the pre-task ambient-key expectation to the new explicit-pin contract.
-
----
-
-# Task 1 Follow-up Fix Report — fail closed for missing native C2 credentials
-
-Date: 2026-08-01
-Fix commit: `6c982ee`
-
-## Scope completed
-
-- Modified `src/tagger.ts`
-- Modified `src/create-ui-spec-model-client.test.ts`
-- Preserved the approved C2 Claude assertion change in `src/c2/model-telemetry.test.ts` without changing any other existing C2 assertion
-
-## RED evidence
-
-Command:
-
-```bash
-npx vitest run src/c2/model-telemetry.test.ts src/create-ui-spec-model-client.test.ts
-```
-
-Observed failure excerpts before the production fix:
-
-```text
-FAIL  src/create-ui-spec-model-client.test.ts > ... > fails closed on a missing explicit Claude apiKey without sending a request
-AssertionError: expected [Function] to throw error matching /api|key|ANTHROPIC/i but got 'fetch should not run'
-```
-
-```text
-FAIL  src/create-ui-spec-model-client.test.ts > ... > fails closed on a missing explicit Gemini apiKey without sending a request
-AssertionError: expected [Function] to throw error matching /api|key|GEMINI/i but got 'fetch should not run'
-```
-
-Interpretation:
-
-- `callTextModelWithMetadata` still allowed the native Claude/Gemini branch to fall back to ambient credentials when the explicit request omitted `endpoint.apiKey`.
-- That violated the approved C2 contract for the explicit path.
-
-## GREEN evidence
-
-Focused command:
-
-```bash
-npx vitest run src/c2/model-telemetry.test.ts src/create-ui-spec-model-client.test.ts
-```
-
-Focused result:
-
-```text
-Test Files  2 passed (2)
-Tests  25 passed (25)
-Duration  1.28s
-```
-
-Build / broader gate:
-
-```bash
-npm run build
-```
-
-Build result:
-
-```text
-check-public-site-boundary: PASS
-validate:c2-pilot: manifest up to date
-validate:c2-label-selection:schema: OK
-validate:c2-baseline: OK
-validate:c2-baseline-cases: All 22 baseline case packages passed
-generate-references: completed
-exit code: 0
-```
-
-## Implementation summary
-
-- Tightened `callTextModelWithMetadata` so every provider in the explicit C2 path requires `endpoint.apiKey`.
-- Removed native-provider ambient fallback from the explicit path while leaving legacy non-C2 callers unchanged.
-- Strengthened the no-ambient-leak assertions to check the concrete seeded ambient values directly.
-- Added focused missing-key coverage for both Claude and Gemini, asserting failure before `fetch`.
-
-## Self-review
-
-- The fix is closely scoped to the explicit C2 entry point; it does not change legacy `callTextModel` ambient behavior.
-- The approved C2 Claude assertion remains intact, and no other existing C2 assertion changed.
-- The new tests now cover both the “ambient values do not leak into requests” and “missing native explicit credentials fail before fetch” cases.
-
-## Concerns
-
-- None blocking.
+- The `tsc --noEmit` non-clean state is **by design** for after Task 1 (carryover
+  to Task 3). It should be noted in the Task 3 report that Task 3 is the gate
+  that restores a clean compile.
+- One pre-existing test's regex had to be aligned with the plan's mandated
+  message (see "Reconciliation" above). This is a plan-internal inconsistency
+  that the plan's own wording resolves; the source error message was not changed.
+- Review artifacts: none written. The commit was not blocked by any git review
+  hook (commit `9840b30` landed with the `prepare-commit-msg` gates passing;
+  no `ZCODE_BYPASS_REVIEW` used). Later branch-level review remains for the
+  overall feature per the branch workflow.

@@ -63,6 +63,9 @@ describe("retag gold contract", () => {
     const candidate = submission();
     candidate.labels[0]!.fields.components = { status: "present", value: ["observability"], evidenceSource: "image" };
     expect(() => RetagGoldSubmissionSchema.parse(candidate)).toThrow(/components/);
+    const duplicate = submission();
+    duplicate.labels[0]!.fields.components = { status: "present", value: ["chart", "chart"], evidenceSource: "image" };
+    expect(() => RetagGoldSubmissionSchema.parse(duplicate)).toThrow(/unique/);
   });
 
   it("requires DOM evidence for a type pairing", () => {

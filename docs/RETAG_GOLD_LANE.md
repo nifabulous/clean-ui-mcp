@@ -73,6 +73,15 @@ The command is read-only with respect to the corpus and refuses to write under
 `corpus/`. A submission that names a changed image or a different selection is
 invalid, even if all labels look plausible.
 
+The validated submission envelope can be passed directly to a shadow retag;
+the runner converts it to evaluator labels and still rechecks the current
+image bindings:
+
+```sh
+npm run retag-shadow -- --provider gemini --sample-file /private/ids.txt \
+  --gold /private/reviewer-alice.validated.json
+```
+
 ## Scoring implications
 
 `src/retag-eval.ts` treats `abstain` and `oov` as non-scoring labels. OOV counts

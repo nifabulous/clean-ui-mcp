@@ -22,7 +22,7 @@ const Status = z.enum(["present", "none", "abstain", "oov"]);
 const RawFieldLabelSchema = z.object({
   status: Status,
   value: z.unknown().optional(),
-  oov: z.array(z.string().trim().min(1).max(80)).min(1).max(8).optional(),
+  oov: z.array(z.string().trim().min(1).max(80)).min(1).max(8).refine((values) => new Set(values).size === values.length, "OOV candidates must be unique").optional(),
   evidenceSource: EvidenceSource,
   note: z.string().trim().min(1).max(500).optional(),
 }).strict();
@@ -50,13 +50,13 @@ function fieldLabelSchema(field: RetagGoldField) {
 const ComponentsFieldSchema = fieldLabelSchema("components").superRefine((value, ctx) => {
   if (value.status !== "present") return;
   const result = z.array(Component).min(1).max(10).safeParse(value.value);
-  if (!result.success) ctx.addIssue({ code: "custom", path: ["value"], message: "components must use the canonical Component vocabulary" });
+  if (!result.success || new Set(result.data).size !== result.data.length) ctx.addIssue({ code: "custom", path: ["value"], message: "components must use unique canonical Component values" });
 });
 
 const DomainTagsFieldSchema = fieldLabelSchema("domainTags").superRefine((value, ctx) => {
   if (value.status !== "present") return;
   const result = z.array(DomainTag).min(1).max(4).safeParse(value.value);
-  if (!result.success) ctx.addIssue({ code: "custom", path: ["value"], message: "domainTags must use the canonical DomainTag vocabulary" });
+  if (!result.success || new Set(result.data).size !== result.data.length) ctx.addIssue({ code: "custom", path: ["value"], message: "domainTags must use unique canonical DomainTag values" });
 });
 
 const ColorSchemeFieldSchema = fieldLabelSchema("colorScheme").superRefine((value, ctx) => {
@@ -75,7 +75,7 @@ const MoodFieldSchema = fieldLabelSchema("mood").superRefine((value, ctx) => {
 
 const TypePairingFieldSchema = fieldLabelSchema("visual.typePairing").superRefine((value, ctx) => {
   if (value.status !== "present") return;
-  const result = TypePairing.safeParse(value.value);
+  const result = TypePairing.strict().safeParse(value.value);
   if (!result.success) ctx.addIssue({ code: "custom", path: ["value"], message: "typePairing must use display/body/notes" });
   if (value.evidenceSource !== "dom" && value.evidenceSource !== "both") {
     ctx.addIssue({ code: "custom", path: ["evidenceSource"], message: "typePairing present labels require DOM evidence" });

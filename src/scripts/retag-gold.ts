@@ -92,9 +92,9 @@ function currentImageHashes(selection: RetagGoldSelection, corpusPath: string): 
   }));
 }
 
-function outputJson(path: string, value: unknown): void {
+function outputJson(path: string, value: unknown, corpusPath: string): void {
   const absolute = resolve(path);
-  const corpusRoot = resolve("corpus");
+  const corpusRoot = resolve(dirname(corpusPath));
   if (absolute === corpusRoot || absolute.startsWith(corpusRoot + sep)) throw new Error("gold artifacts must not be written inside corpus/");
   mkdirSync(dirname(absolute), { recursive: true });
   if (existsSync(absolute)) throw new Error(`refusing to overwrite existing artifact: ${absolute}`);
@@ -129,7 +129,7 @@ async function main(): Promise<void> {
   const selection = buildGoldSelection(c2, selectionBytes, corpusPath);
   if (mode === "packet") {
     if (!values.out) throw new Error("packet mode requires --out; use a private path outside corpus/");
-    outputJson(values.out, buildRetagGoldPacket(selection));
+    outputJson(values.out, buildRetagGoldPacket(selection), corpusPath);
     return;
   }
   if (!values.submission) throw new Error("validate mode requires --submission");
@@ -140,7 +140,7 @@ async function main(): Promise<void> {
     validateRetagGoldPair(submission, peer, selection);
   }
   const goldLabels = toGoldLabels(submission);
-  if (values.out) outputJson(values.out, submission);
+  if (values.out) outputJson(values.out, submission, corpusPath);
   console.log(`retag gold submission valid: ${goldLabels.length} entries, ${RETAG_GOLD_FIELDS.length} fields, selection ${selection.selectionSha256}`);
 }
 

@@ -120,6 +120,10 @@ npm run retag-shadow -- --provider gemini --sample-file /private/ids.txt \
   --gold /private/reviewer-alice.validated.json
 ```
 
+The canonical artifact can be used in the same `--gold` slot. The shadow run
+remains immutable and writes per-field exact accuracy, precision, recall, F1,
+abstention, and OOV metrics to its private `scores.json`.
+
 ## Scoring implications
 
 `src/retag-eval.ts` treats `abstain` and `oov` as non-scoring labels. OOV counts

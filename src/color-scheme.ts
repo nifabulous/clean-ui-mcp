@@ -2,6 +2,7 @@ import sharp from "sharp";
 
 export const COLOR_SCHEME_THRESHOLD = 110;
 export const COLOR_SCHEME_MARGIN = 12;
+export const COLOR_SCHEME_MAX_DIMENSION = 256;
 
 export type ColorScheme = "light" | "dark";
 
@@ -13,8 +14,12 @@ export type ColorSchemeDetection = {
 };
 
 /** Classify only clear page-level themes from production image pixels. */
-export async function detectColorScheme(imagePath: string): Promise<ColorSchemeDetection> {
-  const { data, info } = await sharp(imagePath).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+export async function detectColorScheme(imagePath: string, maxDimension = COLOR_SCHEME_MAX_DIMENSION): Promise<ColorSchemeDetection> {
+  const { data, info } = await sharp(imagePath)
+    .resize({ width: maxDimension, height: maxDimension, fit: "inside", withoutEnlargement: true })
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
   const lumas: number[] = [];
   const channels = info.channels;
   for (let offset = 0; offset + channels <= data.length; offset += channels) {

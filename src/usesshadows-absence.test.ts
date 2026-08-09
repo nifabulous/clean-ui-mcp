@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { CorpusEntry } from "./schema.js";
+import { isVerified } from "./corpus-trust.js";
 import { entryToDocument } from "./embeddings.js";
 import { boolLabel } from "./server-factory.js";
 import { claimForField } from "./scripts/verify-corpus.js";
@@ -171,18 +172,23 @@ describe("the shadow detector does not contradict an absent claim", () => {
   });
 });
 
-// ── Corollary 4: no stored value changes ────────────────────────────────────
-// The migration's byte-neutrality was verified once, directly: HEAD's
-// `entryToDocument` and this one were imported side by side in a single vitest
-// run and compared across all 787 real entries — 0 differed, so
-// `corpus/embeddings.json` needs no rebuild.
+// ── The corpus after the repair ──────────────────────────────────────────────
+// The schema migration itself was byte-neutral, verified once by importing HEAD's
+// `entryToDocument` alongside the new one in a single vitest run and comparing all
+// 787 documents: 0 differed.
 //
-// That check is NOT pinned as a content hash here on purpose. A sha256 over
-// corpus-derived text fails on any unrelated corpus edit, which trains people to
-// re-baseline it — and a re-baselined hash proves nothing. (It also disagreed
-// between `node dist/` and vitest during development, because `dist/` and `src/`
-// were out of sync; the property assertions below cannot drift that way.)
-describe("the existing corpus is untouched by a type-only migration", () => {
+// The REPAIR that followed was not byte-neutral and was not meant to be. It
+// cleared `visual.usesShadows` on the 768 entries that carried a value with no
+// verification record, and `corpus/embeddings.json` was rebuilt (781 entries
+// re-embedded — the 768 plus 13 that were already content-stale from earlier
+// edits). `npm run corpus-stats` reports content-stale 0.
+//
+// No content hash is pinned here on purpose. A sha256 over corpus-derived text
+// fails on any unrelated corpus edit, which trains people to re-baseline it — and
+// a re-baselined hash proves nothing. The property assertions below cannot drift
+// that way. (One also disagreed between `node dist/` and vitest during
+// development, because `dist/` and `src/` were out of sync.)
+describe("the corpus after the repair", () => {
   // `corpus/entries.json` is NOT tracked (excluded via .git/info/exclude), so it
   // is absent on a clean checkout and in CI. These assertions describe the local
   // private corpus; skipping when it is missing is correct, and is why the
@@ -195,24 +201,48 @@ describe("the existing corpus is untouched by a type-only migration", () => {
     id: string; visual?: { usesShadows?: boolean | null };
   }>;
 
-  maybe("has 787 entries, every one carrying a boolean usesShadows", () => {
+  // Was "every one carrying a boolean". The repair (`npm run clear-unverified --
+  // --field visual.usesShadows --write`) cleared the 768 entries that had a value
+  // and no verification record, so absence is now the NORMAL state for this field
+  // and a boolean is the exception that must be backed by evidence.
+  maybe("has 787 entries, and every remaining boolean usesShadows is verified", () => {
     expect(entries.length).toBe(787);
-    const nonBoolean = entries.filter((e) => typeof e.visual?.usesShadows !== "boolean").map((e) => e.id);
-    expect(nonBoolean).toEqual([]);
+    const unbacked = entries
+      .filter((e) => typeof e.visual?.usesShadows === "boolean")
+      .filter((e) => !isVerified(e as never, "visual.usesShadows"))
+      .map((e) => e.id);
+    expect(unbacked).toEqual([]);
   });
 
-  // The invariant the byte-identity check was really about: a boolean still
-  // produces exactly one shadow sentence, so no stored entry's embedding text
-  // moves. Holds for any corpus, not just today's.
-  maybe("every real entry still emits exactly one shadow sentence", () => {
+  maybe("the repair left exactly the entries that hold evidence", () => {
+    const kept = entries.filter((e) => typeof e.visual?.usesShadows === "boolean");
+    expect(kept.length).toBe(19);
+    expect(entries.length - kept.length).toBe(768);
+  });
+
+  // The real invariant, and the one the repair depends on: a shadow sentence
+  // appears if and only if the entry makes a shadow claim. The 768 cleared entries
+  // must emit NEITHER sentence — if absence still rendered as "No shadows", the
+  // repair would have changed the stored value while leaving the served text
+  // asserting the thing it removed. Holds for any corpus, not just today's.
+  maybe("a shadow sentence appears if and only if the entry claims one", () => {
     const wrong = entries.filter((e) => {
       const doc = entryToDocument(e as never);
       const positive = doc.includes("Uses shadows for depth.");
       const negative = doc.includes("No shadows; depth via other means.");
-      return positive === negative || positive !== (e.visual?.usesShadows === true);
+      const claims = typeof e.visual?.usesShadows === "boolean";
+      if (!claims) return positive || negative;      // cleared: neither sentence
+      if (positive === negative) return true;         // exactly one, never both
+      return positive !== (e.visual?.usesShadows === true);
     }).map((e) => e.id);
     expect(wrong).toEqual([]);
   });
+
+  // NOT asserted: that the word "shadow" is absent from a cleared entry's document.
+  // 346 of the 768 have prose (critique / whatToSteal / antiPatterns) that discusses
+  // shadows, which is legitimate — the repair removed a structured CLAIM, not every
+  // mention. The iff assertion above is the real guarantee; a keyword sweep here
+  // would have failed for the wrong reason and invited someone to weaken it.
 
   maybe("and no real entry's document leaves a double space", () => {
     const spaced = entries.filter((e) => / {2}/.test(entryToDocument(e as never))).map((e) => e.id);

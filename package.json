@@ -72,7 +72,8 @@
     "c2:baseline:finalize-scorecards": "tsx scripts/finalize-baseline-blind-scorecards.mts",
     "validate:c2-baseline-runner": "tsx src/scripts/run-c2-baseline.ts validate --manifest eval/c2/baseline/manifest.json --calibration eval/c2/calibration/frozen.json",
     "validate-readiness-artifacts": "tsc && node dist/scripts/validate-readiness-artifacts.js",
-    "typecheck:contracts": "tsc --noEmit && tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck src/tool-contract-types.test.ts"
+    "typecheck:contracts": "tsc --noEmit && tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck src/tool-contract-types.test.ts",
+    "clear-unverified": "tsc && node dist/scripts/clear-unverified-cli.js"
   },
   "keywords": [
     "mcp",

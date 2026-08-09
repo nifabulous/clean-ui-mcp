@@ -12,6 +12,7 @@ import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT, type DirectionT } from "../schema.js";
 import { stripGatedFields, assertNoIncomingVerification, preserveGatedFields } from "../gated-fields.js";
+import { carryVerification } from "../verification-carry.js";
 import { findVagueAntiPatterns } from "../content-lint.js";
 import { CORPUS_ROOT, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, privateImageDir, toCorpusRelativePath } from "../paths.js";
 import { describeError } from "../errors.js";
@@ -166,11 +167,19 @@ export function stampProvenance(
   opts: { advanceTaggedAt?: boolean } = {},
 ): void {
   const prior = entry.provenance;
+  // SPREAD, not a rebuild. The prior code listed four keys while the schema
+  // declares seven, so every call silently discarded `verification`,
+  // `verifyAttempts` and `dataQuality` — ~447 records across 50 entries, each
+  // bought with a real vision call. Fail-closed, so nothing false was served; the
+  // evidence was just thrown away.
+  //
+  // Preserving them here is NOT sufficient on its own: on a path that changes
+  // values (retag, human edit) a carried record would certify text nobody checked.
+  // `carryVerification` is what drops the stale ones, and the two mutation sites
+  // call it. This function's job is only taggedBy/taggedAt.
   entry.provenance = {
+    ...prior,
     taggedBy: mode,
-    // Preserve existing capture + reviewedBy — never replace.
-    capture: prior?.capture,
-    reviewedBy: prior?.reviewedBy,
     // Advance taggedAt only on auto-tag/retag/new auto-reviewed save, NOT on later human edits.
     taggedAt: mode === "auto" || opts.advanceTaggedAt ? today : prior?.taggedAt,
   };
@@ -2156,10 +2165,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       const validated = preserveGatedFields(validateEntryPayload(cleaned), entry);
       // Retag advances taggedAt — the content was freshly re-extracted.
       stampProvenance(validated, new Date().toISOString().slice(0, 10), "auto");
+      // A retag re-extracts every value from the same screenshot, so a record kept
+      // blindly would certify new text against old evidence. Records come from the
+      // STORED entry and survive only where the value is unchanged.
+      const carried = carryVerification(validated, entry);
       const idx = entries.findIndex((e) => e.id === payload.id);
-      entries[idx] = validated;
+      entries[idx] = carried;
       saveEntries(entries);
-      sendJson(res, 200, { ok: true, entry: validated });
+      sendJson(res, 200, { ok: true, entry: carried });
     } catch (error) {
       sendJson(res, 400, { ok: false, error: explainTagError(error) });
     }
@@ -2277,9 +2290,15 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         if (prior && prior.provenance?.taggedBy === "auto") {
           stampProvenance(entry, prior.provenance?.taggedAt ?? new Date().toISOString().slice(0, 10), "auto-reviewed");
         }
-        entries[index] = entry;
+        // This entry is built wholly from the client body, so its provenance is
+        // untrusted input: carryVerification takes records from the STORED entry
+        // only and drops any whose value the edit changed. That closes record
+        // INJECTION here as well as record loss — the update-path counterpart to
+        // the create path's outright refusal.
+        const updated = carryVerification(entry, prior);
+        entries[index] = updated;
         saveEntries(entries);
-        sendJson(res, 200, { entry });
+        sendJson(res, 200, { entry: updated });
       } catch (error) {
         sendJson(res, 400, { error: "Entry validation failed", issues: entryIssues(error) });
       }

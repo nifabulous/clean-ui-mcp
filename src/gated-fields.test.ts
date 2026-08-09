@@ -326,7 +326,15 @@ describe("only the verifier writes verification records", () => {
     const offenders = walk(root)
       .filter((f) => !f.endsWith(".test.ts") && !f.endsWith(".test.mts") && !f.includes("__fixtures__"))
       .filter((f) => !f.endsWith("/verify-corpus.ts"))
-      .filter((f) => /verification\s*[:=]\s*\{/.test(readFileSync(f, "utf8")))
+      // Comments are stripped first: a doc comment that quotes `verification: {}`
+      // is not an assignment, and matching one is the same false positive the
+      // usesShadows enumeration hit.
+      .filter((f) => {
+        const src = readFileSync(f, "utf8")
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+        return /verification\s*[:=]\s*\{/.test(src);
+      })
       .map((f) => f.slice(root.length + 1));
     expect(offenders).toEqual([]);
   });

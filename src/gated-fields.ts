@@ -182,12 +182,26 @@ export function preserveGatedFields(next: CorpusEntryT, prior: CorpusEntryT): Co
  * this split has to be deliberate rather than incidental.)
  */
 export function assertNoIncomingVerification(entry: CorpusEntryT): void {
-  const provenance = (entry as unknown as { provenance?: { verification?: Record<string, unknown> } }).provenance;
-  const keys = Object.keys(provenance?.verification ?? {});
-  if (keys.length === 0) return;
+  const provenance = (entry as unknown as {
+    provenance?: {
+      verification?: Record<string, unknown>;
+      verifyAttempts?: Record<string, unknown>;
+      dataQuality?: Record<string, unknown>;
+    };
+  }).provenance;
+  // All THREE field-keyed maps, not just `verification`. Review caught that the
+  // other two are injectable too, and while neither is served as trust directly,
+  // `verifyAttempts` SUPPRESSES verification via alreadyProcessedAtVersion and a
+  // planted `dataQuality` finding fabricates a contradiction against a value.
+  const found: string[] = [];
+  for (const map of ["verification", "verifyAttempts", "dataQuality"] as const) {
+    for (const key of Object.keys(provenance?.[map] ?? {})) found.push(`${map}.${key}`);
+  }
+  if (found.length === 0) return;
   throw new Error(
-    `Refusing to create entry "${entry.id}": it arrives with verification records for ` +
-    `${keys.sort().join(", ")}. Only the verifier (scripts/verify-corpus.ts) writes ` +
-    `provenance.verification; a new entry cannot already be verified.`,
+    `Refusing to create entry "${entry.id}": it arrives with verifier-owned records ` +
+    `(${found.sort().join(", ")}). Only the verifier (scripts/verify-corpus.ts) writes ` +
+    `provenance.verification / verifyAttempts / dataQuality; a new entry cannot ` +
+    `already be verified.`,
   );
 }

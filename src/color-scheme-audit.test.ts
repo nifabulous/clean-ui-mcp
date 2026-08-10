@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import { buildColorSchemeAuditReport, validateColorSchemeAuditReport } from "./color-scheme-audit.js";
+import { COLOR_SCHEME_MARGIN, COLOR_SCHEME_MAX_DIMENSION, COLOR_SCHEME_THRESHOLD } from "./color-scheme.js";
 
 function hash(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -110,5 +111,42 @@ describe("color scheme audit", () => {
       entries: [{ ...report.entries[0], imageSha256: null }],
     })).toThrow(/image SHA-256/);
     expect(report.detector).toMatchObject({ algorithmVersion: "color-scheme-v1", maxDimension: 256 });
+  });
+
+  it("rejects semantically contradictory statuses and detector provenance", async () => {
+    const report = await buildColorSchemeAuditReport({
+      corpusSha256: "a".repeat(64),
+      entries: [{ entryId: "one", imagePath: "one.png", imageSha256: "b".repeat(64), existingColorScheme: null }],
+      detect: async () => ({ colorScheme: "light", medianLuma: 220, threshold: COLOR_SCHEME_THRESHOLD, margin: COLOR_SCHEME_MARGIN }),
+    });
+    const cases = [
+      { name: "abstain with a detection", value: { ...report, entries: [{ ...report.entries[0], status: "abstain" as const }] }, message: /abstain rows cannot contain a detected color scheme/ },
+      { name: "propose without a detection", value: { ...report, entries: [{ ...report.entries[0], detectedColorScheme: null }] }, message: /propose rows require a detected color scheme/ },
+      { name: "unchanged without an existing value", value: { ...report, entries: [{ ...report.entries[0], status: "unchanged" as const }] }, message: /unchanged rows require existingColorScheme/ },
+      { name: "conflict without a disagreement", value: { ...report, entries: [{ ...report.entries[0], status: "conflict" as const, existingColorScheme: "light" }] }, message: /conflict rows require different/ },
+      { name: "error without an error payload", value: { ...report, entries: [{ ...report.entries[0], status: "error" as const }] }, message: /error rows require an error message/ },
+      { name: "detector threshold drift", value: { ...report, detector: { ...report.detector, threshold: 9999 } }, message: /detector\.threshold/ },
+      { name: "detector margin drift", value: { ...report, detector: { ...report.detector, margin: 0 } }, message: /detector\.margin/ },
+      { name: "detector dimension drift", value: { ...report, detector: { ...report.detector, maxDimension: 64 } }, message: /detector\.maxDimension/ },
+      { name: "row threshold drift", value: { ...report, entries: [{ ...report.entries[0], threshold: 9999 }] }, message: /threshold must match detector/ },
+    ];
+    for (const testCase of cases) {
+      const entries = testCase.value.entries;
+      const count = (status: string) => entries.filter((entry) => entry.status === status).length;
+      const value = {
+        ...testCase.value,
+        summary: {
+          entries: entries.length,
+          proposed: count("propose"),
+          unchanged: count("unchanged"),
+          conflicts: count("conflict"),
+          abstained: count("abstain"),
+          missingImages: count("missing-image"),
+          errors: count("error"),
+        },
+      };
+      expect(() => validateColorSchemeAuditReport(value), testCase.name).toThrow(testCase.message);
+    }
+    expect(COLOR_SCHEME_MAX_DIMENSION).toBe(report.detector.maxDimension);
   });
 });

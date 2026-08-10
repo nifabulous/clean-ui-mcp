@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,5 +40,13 @@ describe("color scheme audit CLI", () => {
     const existing = runCli(["--corpus", corpusPath, "--out", reportPath]);
     expect(existing.status).not.toBe(0);
     expect(existing.stderr).toMatch(/EEXIST|already exists|file exists/i);
+
+    const corpusOutputDir = join(corpusRoot, "private-reports");
+    mkdirSync(corpusOutputDir);
+    const symlinkedOutputDir = join(root, "sneaky-output");
+    symlinkSync(corpusOutputDir, symlinkedOutputDir);
+    const escaped = runCli(["--corpus", corpusPath, "--out", join(symlinkedOutputDir, "leaked-report.json")]);
+    expect(escaped.status).not.toBe(0);
+    expect(escaped.stderr).toMatch(/outside the corpus directory/);
   }, 120_000);
 });

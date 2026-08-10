@@ -20,6 +20,15 @@ describe("color scheme audit CLI inputs", () => {
     expect(inputs[1]).toMatchObject({ entryId: "two", imagePath: null, imageSha256: null, existingColorScheme: null });
   });
 
+  it("allows double dots inside a filename while rejecting traversal segments", () => {
+    const root = mkdtempSync(join(tmpdir(), "clean-ui-color-audit-"));
+    const imageDir = join(root, "images-private");
+    mkdirSync(imageDir, { recursive: true });
+    writeFileSync(join(imageDir, "foo..bar.png"), "fixture-image");
+    expect(() => buildColorSchemeAuditInputs([{ id: "double-dot", image: { path: "images-private/foo..bar.png" } }], root)).not.toThrow();
+    expect(() => buildColorSchemeAuditInputs([{ id: "dot-segment", image: { path: "images-private/./foo.png" } }], root)).toThrow(/safe corpus image path/);
+  });
+
   it("rejects traversal, absolute, and symlink-escaping paths", () => {
     const root = mkdtempSync(join(tmpdir(), "clean-ui-color-audit-"));
     mkdirSync(join(root, "images-private"), { recursive: true });

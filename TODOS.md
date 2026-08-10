@@ -654,8 +654,9 @@ run on the current default without changing it or accepting resume passes.
 retag-promotion workflow without allowing detector output to write the corpus
 directly.
 
-**Why:** The audit produces trustworthy per-image proposals, conflicts, and
-abstentions, but `retag-promote` currently consumes shadow candidates plus
+**Why:** The audit produces image-hash-bound deterministic proposals, conflicts,
+and abstentions, but it is not ground truth until colorScheme gold labels clear
+the calibration gate. `retag-promote` currently consumes shadow candidates plus
 explicit decisions and gold scores. Without a handoff, operators must
 manually translate a 787-entry report before any reviewed promotion.
 

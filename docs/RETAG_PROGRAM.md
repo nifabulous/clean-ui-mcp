@@ -51,7 +51,10 @@ agreement into false ground truth.
   new proposals, unchanged values, conflicts, abstentions, missing images, and
   decode errors. It records the detector version and 256px sampling bound,
   validates its runtime artifact schema, and reads the exact bytes it hashes.
-  Filling the existing corpus remains a separate, calibration-gated migration.
+  These are deterministic candidate measurements, not ground truth: the
+  threshold and abstention margin still require colorScheme gold labels before
+  any corpus-wide fill. Filling the existing corpus remains a separate,
+  calibration-gated migration.
 - The current full-corpus decision is recorded and corpus-hash-bound in
   [retag-disposition-v1.json](/Users/olaniyi.oladokun/Downloads/clean-ui-mcp/docs/retag-disposition-v1.json).
   Validate it with `npm run retag-disposition`; regenerate only after an

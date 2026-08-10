@@ -96,11 +96,64 @@ const ColorSchemeAuditReportBaseSchema = z.object({
 }).strict();
 
 export const ColorSchemeAuditReportSchema = ColorSchemeAuditReportBaseSchema.superRefine((report, ctx) => {
+  if (report.detector.maxDimension !== COLOR_SCHEME_MAX_DIMENSION) {
+    ctx.addIssue({ code: "custom", path: ["detector", "maxDimension"], message: `detector.maxDimension must equal ${COLOR_SCHEME_MAX_DIMENSION}` });
+  }
+  if (report.detector.threshold !== COLOR_SCHEME_THRESHOLD) {
+    ctx.addIssue({ code: "custom", path: ["detector", "threshold"], message: `detector.threshold must equal ${COLOR_SCHEME_THRESHOLD}` });
+  }
+  if (report.detector.margin !== COLOR_SCHEME_MARGIN) {
+    ctx.addIssue({ code: "custom", path: ["detector", "margin"], message: `detector.margin must equal ${COLOR_SCHEME_MARGIN}` });
+  }
   const ids = report.entries.map((entry) => entry.entryId);
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", path: ["entries"], message: "audit entry IDs must be unique" });
   for (const [index, entry] of report.entries.entries()) {
     if (entry.imagePath && entry.status !== "missing-image" && !entry.imageSha256) {
       ctx.addIssue({ code: "custom", path: ["entries", index, "imageSha256"], message: "audited image rows require an image SHA-256" });
+    }
+    if (entry.threshold !== report.detector.threshold) {
+      ctx.addIssue({ code: "custom", path: ["entries", index, "threshold"], message: "entry threshold must match detector.threshold" });
+    }
+    if (entry.margin !== report.detector.margin) {
+      ctx.addIssue({ code: "custom", path: ["entries", index, "margin"], message: "entry margin must match detector.margin" });
+    }
+    const addSemanticIssue = (message: string) => ctx.addIssue({ code: "custom", path: ["entries", index, "status"], message });
+    if (["propose", "unchanged", "conflict", "abstain", "error"].includes(entry.status) && !entry.imagePath) {
+      addSemanticIssue(`${entry.status} rows require an imagePath`);
+    }
+    switch (entry.status) {
+      case "propose":
+        if (entry.detectedColorScheme === null) addSemanticIssue("propose rows require a detected color scheme");
+        if (entry.existingColorScheme !== null) addSemanticIssue("propose rows require no existing color scheme");
+        if (entry.error) addSemanticIssue("propose rows cannot contain an error message");
+        break;
+      case "unchanged":
+        if (entry.detectedColorScheme === null) addSemanticIssue("unchanged rows require a detected color scheme");
+        if (entry.existingColorScheme === null) addSemanticIssue("unchanged rows require existingColorScheme");
+        if (entry.existingColorScheme !== null && entry.existingColorScheme !== entry.detectedColorScheme) addSemanticIssue("unchanged rows require matching existing and detected color schemes");
+        if (entry.error) addSemanticIssue("unchanged rows cannot contain an error message");
+        break;
+      case "conflict":
+        if (entry.detectedColorScheme === null) addSemanticIssue("conflict rows require a detected color scheme");
+        if (entry.existingColorScheme === null) addSemanticIssue("conflict rows require existingColorScheme");
+        if (entry.existingColorScheme !== null && entry.existingColorScheme === entry.detectedColorScheme) addSemanticIssue("conflict rows require different existing and detected color schemes");
+        if (entry.error) addSemanticIssue("conflict rows cannot contain an error message");
+        break;
+      case "abstain":
+        if (entry.detectedColorScheme !== null) addSemanticIssue("abstain rows cannot contain a detected color scheme");
+        if (entry.error) addSemanticIssue("abstain rows cannot contain an error message");
+        break;
+      case "missing-image":
+        if (entry.detectedColorScheme !== null) addSemanticIssue("missing-image rows cannot contain a detected color scheme");
+        if (entry.medianLuma !== null) addSemanticIssue("missing-image rows cannot contain a median luma");
+        if (entry.imageSha256 !== null) addSemanticIssue("missing-image rows cannot contain an image SHA-256");
+        if (entry.error) addSemanticIssue("missing-image rows cannot contain an error message");
+        break;
+      case "error":
+        if (!entry.error) addSemanticIssue("error rows require an error message");
+        if (entry.detectedColorScheme !== null) addSemanticIssue("error rows cannot contain a detected color scheme");
+        if (entry.medianLuma !== null) addSemanticIssue("error rows cannot contain a median luma");
+        break;
     }
   }
   const count = (status: ColorSchemeAuditStatus) => report.entries.filter((entry) => entry.status === status).length;
@@ -155,9 +208,6 @@ export async function buildColorSchemeAuditReport(options: {
     try {
       const imageBytes = input.loadImage?.();
       imageSha256 = imageBytes ? sha256(imageBytes) : input.imageSha256;
-      if (imageBytes && input.imageSha256 && input.imageSha256 !== imageSha256) {
-        return { ...base, imageSha256, status: "error", error: "image changed while building the audit input" };
-      }
       const detection = await options.detect(input.imagePath, imageBytes);
       const detectedColorScheme = detection.colorScheme;
       const status: ColorSchemeAuditStatus = detectedColorScheme === null

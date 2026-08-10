@@ -23,7 +23,8 @@ function sha256(bytes: Buffer | string): string {
 }
 
 function assertSafeImagePath(corpusRoot: string, imagePath: string): string {
-  if (isAbsolute(imagePath) || imagePath.includes("..") || (!imagePath.startsWith("images-private/") && !imagePath.startsWith("images-public/"))) {
+  const pathSegments = imagePath.split(/[\\/]/);
+  if (isAbsolute(imagePath) || pathSegments.some((segment) => segment === "." || segment === "..") || (!imagePath.startsWith("images-private/") && !imagePath.startsWith("images-public/"))) {
     throw new Error(`unsafe corpus image path: ${imagePath}`);
   }
   const realCorpusRoot = realpathSync(corpusRoot);
@@ -35,7 +36,38 @@ function assertSafeImagePath(corpusRoot: string, imagePath: string): string {
   return absoluteImagePath;
 }
 
+function isWithin(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(root + sep);
+}
+
+function nearestExistingPath(path: string): string {
+  let candidate = path;
+  while (!existsSync(candidate)) {
+    const parent = dirname(candidate);
+    if (parent === candidate) return candidate;
+    candidate = parent;
+  }
+  return candidate;
+}
+
+export function assertSafeOutputPath(corpusRoot: string, outPath: string): string {
+  const absoluteOutPath = resolve(outPath);
+  const absoluteCorpusRoot = resolve(corpusRoot);
+  const realCorpusRoot = realpathSync(corpusRoot);
+  if (isWithin(absoluteCorpusRoot, absoluteOutPath)) {
+    throw new Error(`--out must be outside the corpus directory (got ${absoluteOutPath})`);
+  }
+  const existingTarget = existsSync(absoluteOutPath) ? absoluteOutPath : nearestExistingPath(dirname(absoluteOutPath));
+  const realTarget = realpathSync(existingTarget);
+  if (isWithin(realCorpusRoot, realTarget)) {
+    throw new Error(`--out must be outside the corpus directory (got ${absoluteOutPath})`);
+  }
+  return absoluteOutPath;
+}
+
 export function buildColorSchemeAuditInputs(entries: readonly RawCorpusEntry[], corpusRoot: string): ColorSchemeAuditInput[] {
+  // Identity and path violations fail closed before a report is written; per-row
+  // statuses apply once a row has passed these safety invariants.
   const ids = new Set<string>();
   return entries.map((entry) => {
     const entryId = typeof entry.id === "string" && entry.id.trim().length > 0 ? entry.id : null;
@@ -65,8 +97,7 @@ async function main(): Promise<void> {
   if (!values.out) throw new Error("usage: color-scheme-audit --out <private-report.json>");
   const corpusPath = resolve(values.corpus ?? "corpus/entries.json");
   const corpusRoot = resolve(dirname(corpusPath));
-  const outPath = resolve(values.out);
-  if (outPath === corpusRoot || outPath.startsWith(corpusRoot + sep)) throw new Error(`--out must be outside the corpus directory (got ${outPath})`);
+  const outPath = assertSafeOutputPath(corpusRoot, values.out);
   const corpusBytes = readFileSync(corpusPath);
   const parsed = JSON.parse(corpusBytes.toString("utf8")) as { entries?: RawCorpusEntry[] } | RawCorpusEntry[];
   const entries = Array.isArray(parsed) ? parsed : parsed.entries;

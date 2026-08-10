@@ -669,11 +669,14 @@ decision. Preserve `conflict`, `abstain`, missing-image, and error rows as
 non-promotable; emit a draft promotion artifact for the existing review path.
 
 **Depends on / blocked by:** The runtime audit report schema and provenance in
-PR #107, plus a passing private calibration report from
-`color-scheme-calibrate evaluate` with the configured minimum scored labels and
-accuracy. The calibration packet is human-filled and image-hash bound; its
-`pass` status is necessary but not sufficient for promotion. Never promote
-directly from detector output.
+PR #107, plus a private calibration report from `color-scheme-calibrate
+evaluate` whose `promotionEligible` field is `true`. Read that field, not
+`status`: `status` reflects whatever thresholds the caller configured, while
+`promotionEligible` is derived against the fixed promotion floor (12 scored
+labels at accuracy 1), so a deliberately lax run cannot be mistaken for a
+promotion-grade one. The calibration packet is human-filled and image-hash
+bound; even `promotionEligible: true` is necessary but not sufficient for
+promotion. Never promote directly from detector output.
 
 ---
 

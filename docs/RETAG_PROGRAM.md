@@ -58,11 +58,22 @@ agreement into false ground truth.
 - Build the private human calibration packet with
   `npm run color-scheme-calibrate -- packet --audit <audit.json> --corpus
   corpus/entries.json --json <packet.json> --html <packet.html> --size 12`.
-  Reviewers label only `light`, `dark`, or evidence-based `abstain`; evaluate a
+  Reviewers enter their own reviewer ID first, then label only `light`, `dark`,
+  or evidence-based `abstain`. Drafts are stored per reviewer, and the packet
+  page withholds the existing corpus value, the detector's prediction, and the
+  measured luma so a label cannot be anchored to either source. Evaluate a
   completed submission with `color-scheme-calibrate evaluate`. The evaluator
-  binds the packet, audit, and current image bytes and emits `pass`, `fail`, or
-  `insufficient`; even `pass` is evidence for a later reviewed promotion, not
-  an automatic corpus write.
+  re-derives the cohort from the audit, so a hand-picked set of easy rows is
+  refused; it binds the packet, audit, submission, and current image bytes, and
+  emits `pass`, `fail`, or `insufficient` plus a `promotionEligible` flag.
+  Promotion reads `promotionEligible`, not `status`: `status` honours whatever
+  `--minimum-labels` and `--minimum-accuracy` the caller passed, while
+  `promotionEligible` is derived against the fixed floor of 12 scored labels at
+  accuracy 1. Even `promotionEligible: true` is evidence for a later reviewed
+  promotion, not an automatic corpus write.
+- Every calibration artifact is written in one canonical JSON form, so
+  `sha256sum <packet|report>.json` reproduces the digest the artifact records
+  and the provenance is checkable without this codebase.
 - The current full-corpus decision is recorded and corpus-hash-bound in
   [retag-disposition-v1.json](/Users/olaniyi.oladokun/Downloads/clean-ui-mcp/docs/retag-disposition-v1.json).
   Validate it with `npm run retag-disposition`; regenerate only after an

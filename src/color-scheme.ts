@@ -3,6 +3,7 @@ import sharp from "sharp";
 export const COLOR_SCHEME_THRESHOLD = 110;
 export const COLOR_SCHEME_MARGIN = 12;
 export const COLOR_SCHEME_MAX_DIMENSION = 256;
+export const COLOR_SCHEME_DETECTOR_VERSION = "color-scheme-v1";
 
 export type ColorScheme = "light" | "dark";
 
@@ -14,8 +15,10 @@ export type ColorSchemeDetection = {
 };
 
 /** Classify only clear page-level themes from production image pixels. */
-export async function detectColorScheme(imagePath: string, maxDimension = COLOR_SCHEME_MAX_DIMENSION): Promise<ColorSchemeDetection> {
-  const { data, info } = await sharp(imagePath)
+export async function detectColorScheme(image: string | Uint8Array, maxDimension = COLOR_SCHEME_MAX_DIMENSION): Promise<ColorSchemeDetection> {
+  if (!Number.isInteger(maxDimension) || maxDimension < 1) throw new Error(`maxDimension must be a positive integer (got ${maxDimension})`);
+  const source = typeof image === "string" ? image : Buffer.from(image);
+  const { data, info } = await sharp(source)
     .resize({ width: maxDimension, height: maxDimension, fit: "inside", withoutEnlargement: true })
     .removeAlpha()
     .raw()

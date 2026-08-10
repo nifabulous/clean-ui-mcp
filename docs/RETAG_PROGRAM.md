@@ -49,8 +49,9 @@ agreement into false ground truth.
   without writing it, run `npm run color-scheme-audit -- --out
   /tmp/color-scheme-audit.json`. The report is image-hash-bound and separates
   new proposals, unchanged values, conflicts, abstentions, missing images, and
-  decode errors. Filling the existing corpus remains a separate,
-  calibration-gated migration.
+  decode errors. It records the detector version and 256px sampling bound,
+  validates its runtime artifact schema, and reads the exact bytes it hashes.
+  Filling the existing corpus remains a separate, calibration-gated migration.
 - The current full-corpus decision is recorded and corpus-hash-bound in
   [retag-disposition-v1.json](/Users/olaniyi.oladokun/Downloads/clean-ui-mcp/docs/retag-disposition-v1.json).
   Validate it with `npm run retag-disposition`; regenerate only after an

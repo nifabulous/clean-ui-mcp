@@ -5,9 +5,9 @@
  * rows are inputs to a later reviewed promotion step.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { dirname, resolve, sep } from "node:path";
+import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectColorScheme } from "../color-scheme.js";
 import { buildColorSchemeAuditReport, type ColorSchemeAuditInput } from "../color-scheme-audit.js";
@@ -22,16 +22,34 @@ function sha256(bytes: Buffer | string): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function assertSafeImagePath(corpusRoot: string, imagePath: string): string {
+  if (isAbsolute(imagePath) || imagePath.includes("..") || (!imagePath.startsWith("images-private/") && !imagePath.startsWith("images-public/"))) {
+    throw new Error(`unsafe corpus image path: ${imagePath}`);
+  }
+  const realCorpusRoot = realpathSync(corpusRoot);
+  const absoluteImagePath = resolve(corpusRoot, imagePath);
+  if (existsSync(absoluteImagePath)) {
+    const realImagePath = realpathSync(absoluteImagePath);
+    if (realImagePath !== realCorpusRoot && !realImagePath.startsWith(realCorpusRoot + sep)) throw new Error(`image path escapes corpus root: ${imagePath}`);
+  }
+  return absoluteImagePath;
+}
+
 export function buildColorSchemeAuditInputs(entries: readonly RawCorpusEntry[], corpusRoot: string): ColorSchemeAuditInput[] {
+  const ids = new Set<string>();
   return entries.map((entry) => {
-    const entryId = typeof entry.id === "string" && entry.id.length > 0 ? entry.id : "<missing-id>";
+    const entryId = typeof entry.id === "string" && entry.id.trim().length > 0 ? entry.id : null;
+    if (!entryId) throw new Error("missing entry ID in color-scheme audit input");
+    if (ids.has(entryId)) throw new Error(`duplicate entry ID in color-scheme audit input: ${entryId}`);
+    ids.add(entryId);
     const imagePath = typeof entry.image?.path === "string" && entry.image.path.length > 0 ? entry.image.path : null;
-    const absoluteImagePath = imagePath ? resolve(corpusRoot, imagePath) : null;
+    const absoluteImagePath = imagePath ? assertSafeImagePath(corpusRoot, imagePath) : null;
     return {
       entryId,
       imagePath,
-      imageSha256: absoluteImagePath && existsSync(absoluteImagePath) ? sha256(readFileSync(absoluteImagePath)) : null,
+      imageSha256: null,
       existingColorScheme: entry.colorScheme || null,
+      loadImage: absoluteImagePath ? () => readFileSync(absoluteImagePath) : undefined,
     };
   });
 }
@@ -58,7 +76,7 @@ async function main(): Promise<void> {
     corpusSha256: sha256(corpusBytes),
     entries: inputs,
     generatedAt: new Date().toISOString(),
-    detect: (imagePath) => detectColorScheme(resolve(corpusRoot, imagePath)),
+    detect: (imagePath, imageBytes) => detectColorScheme(imageBytes ?? resolve(corpusRoot, imagePath)),
   });
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, JSON.stringify(report, null, 2) + "\n", { flag: "wx" });

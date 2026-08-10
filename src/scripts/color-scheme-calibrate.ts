@@ -10,6 +10,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertSafeOutputPath } from "./color-scheme-audit.js";
 import {
   buildColorSchemeCalibrationPacket,
+  canonicalArtifactJson,
+  COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR,
   ColorSchemeCalibrationPacketSchema,
   evaluateColorSchemeCalibration,
   ColorSchemeCalibrationSubmissionSchema,
@@ -27,9 +29,11 @@ function required(value: string | undefined, flag: string): string {
 
 function readAudit(path: string): ParsedAudit {
   const bytes = readFileSync(path);
-  const auditSha256 = sha256(bytes);
   const audit = validateColorSchemeAuditReport(JSON.parse(bytes.toString("utf8")) as unknown);
-  return { audit, auditSha256 };
+  // Hash the canonical form of the parsed audit, not the raw bytes: the library
+  // re-derives this digest from the audit object, so the two must agree. For an
+  // audit written by `color-scheme-audit` the canonical form is the file bytes.
+  return { audit, auditSha256: sha256(canonicalArtifactJson(audit)) };
 }
 
 function isWithin(root: string, candidate: string): boolean {
@@ -63,6 +67,15 @@ function assertPacketImagesCurrent(packet: ColorSchemeCalibrationPacket, corpusR
 function writePrivate(path: string, content: string, corpusRoot: string): string {
   const absolute = assertSafeOutputPath(corpusRoot, path);
   mkdirSync(dirname(absolute), { recursive: true });
+  // mkdirSync can create or follow a parent that was swapped for a symlink into
+  // the corpus after the check above, and `wx` does not help for a path that
+  // does not exist yet. Re-resolve the realised parent and re-check containment
+  // immediately before writing. This narrows the window rather than closing it;
+  // closing it needs openat-style APIs Node does not expose.
+  const realParent = realpathSync(dirname(absolute));
+  if (isWithin(realpathSync(corpusRoot), realParent)) {
+    throw new Error(`--out must be outside the corpus directory (resolved parent ${realParent})`);
+  }
   writeFileSync(absolute, content, { flag: "wx" });
   return absolute;
 }
@@ -106,7 +119,7 @@ async function main(): Promise<void> {
     if (!values.json && !values.html) throw new Error("packet mode requires --json and/or --html");
     const packet = buildColorSchemeCalibrationPacket(audit, auditSha256, parsePositiveInt(values.size, "--size", 12));
     const imageUrls = assertPacketImagesCurrent(packet, corpusRoot);
-    if (values.json) writePrivate(values.json, JSON.stringify(packet, null, 2) + "\n", corpusRoot);
+    if (values.json) writePrivate(values.json, canonicalArtifactJson(packet), corpusRoot);
     if (values.html) {
       const { buildColorSchemeCalibrationHtml } = await import("../color-scheme-calibration-html.js");
       writePrivate(values.html, buildColorSchemeCalibrationHtml(packet, imageUrls), corpusRoot);
@@ -119,7 +132,7 @@ async function main(): Promise<void> {
   const submissionPath = resolve(required(values.submission, "--submission"));
   const outPath = required(values.out, "--out");
   const packet = ColorSchemeCalibrationPacketSchema.parse(JSON.parse(readFileSync(packetPath, "utf8")) as unknown);
-  const packetSha256 = sha256(JSON.stringify(packet));
+  const packetSha256 = sha256(canonicalArtifactJson(packet));
   const submission = ColorSchemeCalibrationSubmissionSchema.parse(JSON.parse(readFileSync(submissionPath, "utf8")) as unknown);
   assertPacketImagesCurrent(packet, corpusRoot);
   const report = evaluateColorSchemeCalibration(audit, auditSha256, packet, submission, {
@@ -127,9 +140,12 @@ async function main(): Promise<void> {
     minimumScoredLabels: parsePositiveInt(values["minimum-labels"], "--minimum-labels", 12),
     minimumAccuracy: parseUnitInterval(values["minimum-accuracy"], "--minimum-accuracy", 1),
   });
-  const written = writePrivate(outPath, JSON.stringify(report, null, 2) + "\n", corpusRoot);
-  console.log(`calibration ${report.status}: ${written}`);
+  const written = writePrivate(outPath, canonicalArtifactJson(report), corpusRoot);
+  console.log(`calibration ${report.status} (promotion-eligible: ${report.promotionEligible ? "yes" : "no"}): ${written}`);
   console.log(`selected=${report.counts.selected} scored=${report.counts.scored} correct=${report.counts.correct} incorrect=${report.counts.incorrect} abstained=${report.counts.abstained} accuracy=${report.accuracy ?? "n/a"}`);
+  if (!report.promotionEligible) {
+    console.log(`gate below the promotion floor (needs >= ${COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR.minimumScoredLabels} scored labels at accuracy >= ${COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR.minimumAccuracy}); this report cannot gate a corpus promotion`);
+  }
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

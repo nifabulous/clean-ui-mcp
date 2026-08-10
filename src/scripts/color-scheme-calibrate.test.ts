@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildColorSchemeAuditReport } from "../color-scheme-audit.js";
+import { canonicalArtifactJson } from "../color-scheme-calibration.js";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const hash = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
@@ -35,7 +36,7 @@ describe("color scheme calibration CLI", () => {
       detect: async () => ({ colorScheme: "light", medianLuma: 220, threshold: 110, margin: 12 }),
     });
     const auditPath = join(root, "audit.json");
-    writeFileSync(auditPath, JSON.stringify(audit, null, 2));
+    writeFileSync(auditPath, canonicalArtifactJson(audit));
     const packetPath = join(root, "packet.json");
     const htmlPath = join(root, "packet.html");
     const before = readFileSync(corpusPath);
@@ -44,7 +45,7 @@ describe("color scheme calibration CLI", () => {
     expect(readFileSync(packetPath, "utf8")).toContain("color-scheme-calibration-packet");
     expect(readFileSync(htmlPath, "utf8")).toContain("Color-scheme calibration");
     const packet = JSON.parse(readFileSync(packetPath, "utf8")) as { artifactId: string; entries: Array<{ entryId: string; imageSha256: string; detectedColorScheme: string }>; };
-    const packetSha256 = hash(JSON.stringify(packet));
+    const packetSha256 = hash(readFileSync(packetPath));
     const submissionPath = join(root, "submission.json");
     writeFileSync(submissionPath, JSON.stringify({
       schemaVersion: "1.0", artifactType: "color-scheme-calibration-submission", artifactId: "submission-alice-v1", packetArtifactId: packet.artifactId,
@@ -60,5 +61,54 @@ describe("color scheme calibration CLI", () => {
     const unsafe = runCli(["packet", "--audit", auditPath, "--corpus", corpusPath, "--json", join(corpusRoot, "leaked.json")]);
     expect(unsafe.status).not.toBe(0);
     expect(unsafe.stderr).toMatch(/outside the corpus directory/);
-  }, 120_000);
+
+    // Immutable outputs: an existing artifact is never silently overwritten.
+    const overwrite = runCli(["packet", "--audit", auditPath, "--corpus", corpusPath, "--json", packetPath]);
+    expect(overwrite.status).not.toBe(0);
+    expect(overwrite.stderr).toMatch(/EEXIST|exists/i);
+    expect(readFileSync(packetPath, "utf8")).toContain("color-scheme-calibration-packet");
+
+    // The recorded packet digest must be reproducible with sha256sum on the file.
+    expect(hash(readFileSync(packetPath))).toBe(packetSha256);
+
+    // Stale image bytes must stop evaluation rather than score labels against a
+    // screenshot the reviewer never saw.
+    writeFileSync(join(imageDir, "one.png"), Buffer.from("different-image-bytes"));
+    const stale = runCli(["evaluate", "--audit", auditPath, "--packet", packetPath, "--submission", submissionPath, "--corpus", corpusPath, "--out", join(root, "stale.json"), "--minimum-labels", "1", "--minimum-accuracy", "1"]);
+    expect(stale.status).not.toBe(0);
+    expect(stale.stderr).toMatch(/image hash mismatch/);
+    expect(readFileSync(corpusPath)).toEqual(before);
+  }, 180_000);
+
+  it("marks a below-floor gate as not promotion eligible", async () => {
+    const root = mkdtempSync(join(tmpdir(), "clean-ui-color-calibrate-floor-"));
+    const corpusRoot = join(root, "corpus");
+    const imageDir = join(corpusRoot, "images-private");
+    mkdirSync(imageDir, { recursive: true });
+    const imageBytes = Buffer.from("floor-image");
+    writeFileSync(join(imageDir, "one.png"), imageBytes);
+    const corpusPath = join(corpusRoot, "entries.json");
+    writeFileSync(corpusPath, JSON.stringify({ entries: [{ id: "one", image: { path: "images-private/one.png" }, colorScheme: null }] }));
+    const audit = await buildColorSchemeAuditReport({
+      corpusSha256: hash("corpus"),
+      entries: [{ entryId: "one", imagePath: "images-private/one.png", imageSha256: hash(imageBytes), existingColorScheme: null }],
+      detect: async () => ({ colorScheme: "light", medianLuma: 220, threshold: 110, margin: 12 }),
+    });
+    const auditPath = join(root, "audit.json");
+    writeFileSync(auditPath, canonicalArtifactJson(audit));
+    const packetPath = join(root, "packet.json");
+    expect(runCli(["packet", "--audit", auditPath, "--corpus", corpusPath, "--json", packetPath, "--size", "1"]).status).toBe(0);
+    const packet = JSON.parse(readFileSync(packetPath, "utf8")) as { artifactId: string; entries: Array<{ entryId: string; imageSha256: string; detectedColorScheme: string }> };
+    const submissionPath = join(root, "submission.json");
+    writeFileSync(submissionPath, JSON.stringify({
+      schemaVersion: "1.0", artifactType: "color-scheme-calibration-submission", artifactId: "submission-floor-v1", packetArtifactId: packet.artifactId,
+      packetSha256: hash(readFileSync(packetPath)), reviewerId: "floor", sealedAt: "2026-08-10T10:00:00.000Z",
+      labels: packet.entries.map((entry) => ({ entryId: entry.entryId, imageSha256: entry.imageSha256, value: entry.detectedColorScheme })),
+    }));
+    const reportPath = join(root, "calibration.json");
+    const run = runCli(["evaluate", "--audit", auditPath, "--packet", packetPath, "--submission", submissionPath, "--corpus", corpusPath, "--out", reportPath, "--minimum-labels", "1", "--minimum-accuracy", "1"]);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toMatch(/promotion-eligible: no/);
+    expect(JSON.parse(readFileSync(reportPath, "utf8"))).toMatchObject({ status: "pass", promotionEligible: false });
+  }, 180_000);
 });

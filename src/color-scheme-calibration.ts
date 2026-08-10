@@ -21,6 +21,42 @@ export const COLOR_SCHEME_CALIBRATION_REPORT_TYPE = "color-scheme-calibration-re
 export type ColorSchemeCalibrationValue = ColorScheme | "abstain";
 export type ColorSchemeCalibrationStratum = "threshold-near" | "existing-value" | "luma-tail";
 
+/**
+ * The gate a calibration report must clear before it can be cited as evidence
+ * for a corpus promotion. Callers may configure a laxer gate for experiments;
+ * `promotionEligible` on the report records whether they did, so a permissive
+ * run cannot be mistaken for a promotion-grade one.
+ */
+export const COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR = {
+  minimumScoredLabels: 12,
+  minimumAccuracy: 1,
+} as const;
+
+/**
+ * The one serialisation used for every calibration artifact: what the CLI writes
+ * to disk, and what the recorded SHA-256 digests hash. `sha256sum <file>` on a
+ * packet or report therefore reproduces the digest the artifact family records.
+ */
+export function canonicalArtifactJson(artifact: unknown): string {
+  return JSON.stringify(artifact, null, 2) + "\n";
+}
+
+/** Order IDs by UTF-16 code unit so cohort selection cannot vary with host locale or ICU version. */
+function compareEntryIds(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function deriveCalibrationStatus(scored: number, accuracy: number | null, minimumScoredLabels: number, minimumAccuracy: number): "pass" | "fail" | "insufficient" {
+  if (scored < minimumScoredLabels) return "insufficient";
+  return accuracy !== null && accuracy >= minimumAccuracy ? "pass" : "fail";
+}
+
+function deriveCalibrationPromotionEligible(status: string, minimumScoredLabels: number, minimumAccuracy: number): boolean {
+  return status === "pass"
+    && minimumScoredLabels >= COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR.minimumScoredLabels
+    && minimumAccuracy >= COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR.minimumAccuracy;
+}
+
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/, "expected a lowercase SHA-256 hash");
 const ColorSchemeSchema = z.enum(["light", "dark"]);
 const CalibrationValueSchema = z.enum(["light", "dark", "abstain"]);
@@ -123,6 +159,7 @@ export const ColorSchemeCalibrationReportSchema = z.object({
   confusion: z.object({ expectedLight: ConfusionRowSchema, expectedDark: ConfusionRowSchema }).strict(),
   status: z.enum(["pass", "fail", "insufficient"]),
   decisions: z.array(z.object({ entryId: z.string().trim().min(1), human: CalibrationValueSchema, detected: ColorSchemeSchema }).strict()),
+  promotionEligible: z.boolean(),
 }).strict().superRefine((report, ctx) => {
   if (report.counts.scored !== report.counts.correct + report.counts.incorrect) ctx.addIssue({ code: "custom", path: ["counts", "scored"], message: "scored count must equal correct plus incorrect" });
   if (report.counts.selected !== report.counts.scored + report.counts.abstained) ctx.addIssue({ code: "custom", path: ["counts", "selected"], message: "selected count must equal scored plus abstained" });
@@ -149,13 +186,19 @@ export const ColorSchemeCalibrationReportSchema = z.object({
   if (confusionTotal === report.counts.scored && confusionCorrect !== report.counts.correct) {
     ctx.addIssue({ code: "custom", path: ["confusion"], message: "confusion diagonal must equal the correct count" });
   }
-  // Status is derived, not asserted: every branch is checked, so a forged
-  // status cannot disagree with the counts it is supposed to summarise.
-  const expectedStatus = report.counts.scored < report.minimumScoredLabels
-    ? "insufficient"
-    : report.accuracy !== null && report.accuracy >= report.minimumAccuracy ? "pass" : "fail";
+  // Status and promotion eligibility are derived, not asserted, so a forged
+  // value cannot disagree with the counts it is supposed to summarise.
+  const expectedStatus = deriveCalibrationStatus(report.counts.scored, report.accuracy, report.minimumScoredLabels, report.minimumAccuracy);
   if (report.status !== expectedStatus) {
     ctx.addIssue({ code: "custom", path: ["status"], message: `status must be ${expectedStatus} for these counts and gate thresholds` });
+  }
+  const expectedEligible = deriveCalibrationPromotionEligible(expectedStatus, report.minimumScoredLabels, report.minimumAccuracy);
+  if (report.promotionEligible !== expectedEligible) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["promotionEligible"],
+      message: `promotionEligible must be ${expectedEligible}: the promotion floor is ${COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR.minimumScoredLabels} scored labels at accuracy ${COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR.minimumAccuracy}`,
+    });
   }
 });
 
@@ -212,9 +255,9 @@ function pushFirst(out: ColorSchemeCalibrationPacketEntry[], seen: Set<string>, 
 export function selectColorSchemeCalibrationEntries(report: ColorSchemeAuditReport, size = 12): ColorSchemeCalibrationPacketEntry[] {
   if (!Number.isInteger(size) || size < 1) throw new Error("calibration selection size must be a positive integer");
   const candidates = validAuditEntries(report);
-  const byNear = [...candidates].sort((a, b) => Math.abs(a.medianLuma! - COLOR_SCHEME_THRESHOLD) - Math.abs(b.medianLuma! - COLOR_SCHEME_THRESHOLD) || a.entryId.localeCompare(b.entryId));
-  const byExisting = candidates.filter((entry) => entry.existingColorScheme !== null).sort((a, b) => entryRank("existing", a.entryId).localeCompare(entryRank("existing", b.entryId)));
-  const byLuma = [...candidates].sort((a, b) => a.medianLuma! - b.medianLuma! || a.entryId.localeCompare(b.entryId));
+  const byNear = [...candidates].sort((a, b) => Math.abs(a.medianLuma! - COLOR_SCHEME_THRESHOLD) - Math.abs(b.medianLuma! - COLOR_SCHEME_THRESHOLD) || compareEntryIds(a.entryId, b.entryId));
+  const byExisting = candidates.filter((entry) => entry.existingColorScheme !== null).sort((a, b) => compareEntryIds(entryRank("existing", a.entryId), entryRank("existing", b.entryId)));
+  const byLuma = [...candidates].sort((a, b) => a.medianLuma! - b.medianLuma! || compareEntryIds(a.entryId, b.entryId));
   const tails: ColorSchemeAuditEntry[] = [];
   for (let low = 0, high = byLuma.length - 1; low <= high; low += 1, high -= 1) {
     if (byLuma[low]) tails.push(byLuma[low]!);
@@ -235,9 +278,6 @@ export function selectColorSchemeCalibrationEntries(report: ColorSchemeAuditRepo
       progressed = pushFirst(selected, seen, source, stratum) || progressed;
     }
     if (!progressed) break;
-  }
-  if (selected.length < target) {
-    pushFirst(selected, seen, byNear, "threshold-near");
   }
   return selected.slice(0, target);
 }
@@ -266,6 +306,9 @@ export function buildColorSchemeCalibrationPacket(report: ColorSchemeAuditReport
 
 function assertPacketBindsToAudit(audit: ColorSchemeAuditReport, auditSha256: string, packet: ColorSchemeCalibrationPacket, packetSha256: string): void {
   if (packet.auditArtifactId !== audit.artifactId) throw new Error("calibration packet belongs to a different audit artifact");
+  // Recompute rather than trust: without this, "bound to the audit" would mean
+  // only "bound to whatever string the caller passed as the audit hash".
+  if (sha256(canonicalArtifactJson(audit)) !== auditSha256) throw new Error("supplied audit hash does not hash the supplied audit");
   if (packet.auditSha256 !== auditSha256) throw new Error("calibration packet audit hash does not match");
   if (sha256(canonicalEntriesJson(packet.entries)) !== packet.selectionSha256) throw new Error("calibration packet selection hash is invalid");
   // Self-consistency is not provenance: recomputing selectionSha256 over a
@@ -276,7 +319,7 @@ function assertPacketBindsToAudit(audit: ColorSchemeAuditReport, auditSha256: st
   if (canonical.length !== packet.entries.length || sha256(canonicalEntriesJson(canonical)) !== packet.selectionSha256) {
     throw new Error("calibration packet is not the deterministic cohort for this audit");
   }
-  if (sha256(JSON.stringify(packet)) !== packetSha256) throw new Error("calibration packet hash does not match");
+  if (sha256(canonicalArtifactJson(packet)) !== packetSha256) throw new Error("calibration packet hash does not match");
   const byId = new Map(audit.entries.map((entry) => [entry.entryId, entry]));
   for (const selected of packet.entries) {
     const entry = byId.get(selected.entryId);
@@ -326,7 +369,7 @@ export function evaluateColorSchemeCalibration(
   if (!Number.isInteger(minimumScoredLabels) || minimumScoredLabels < 1) throw new Error("minimumScoredLabels must be a positive integer");
   if (!Number.isFinite(minimumAccuracy) || minimumAccuracy < 0 || minimumAccuracy > 1) throw new Error("minimumAccuracy must be between 0 and 1");
   const accuracy = scored ? correct / scored : null;
-  const status = scored < minimumScoredLabels ? "insufficient" : accuracy !== null && accuracy >= minimumAccuracy ? "pass" : "fail";
+  const status = deriveCalibrationStatus(scored, accuracy, minimumScoredLabels, minimumAccuracy);
   return ColorSchemeCalibrationReportSchema.parse({
     schemaVersion: COLOR_SCHEME_CALIBRATION_SCHEMA_VERSION,
     artifactType: COLOR_SCHEME_CALIBRATION_REPORT_TYPE,
@@ -336,7 +379,7 @@ export function evaluateColorSchemeCalibration(
     packetArtifactId: parsedPacket.artifactId,
     packetSha256,
     submissionArtifactId: parsedSubmission.artifactId,
-    submissionSha256: sha256(JSON.stringify(parsedSubmission)),
+    submissionSha256: sha256(canonicalArtifactJson(parsedSubmission)),
     reviewerId: parsedSubmission.reviewerId,
     detector: parsedAudit.detector,
     minimumScoredLabels,
@@ -346,5 +389,6 @@ export function evaluateColorSchemeCalibration(
     confusion,
     status,
     decisions,
+    promotionEligible: deriveCalibrationPromotionEligible(status, minimumScoredLabels, minimumAccuracy),
   });
 }

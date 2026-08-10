@@ -55,6 +55,14 @@ agreement into false ground truth.
   threshold and abstention margin still require colorScheme gold labels before
   any corpus-wide fill. Filling the existing corpus remains a separate,
   calibration-gated migration.
+- Build the private human calibration packet with
+  `npm run color-scheme-calibrate -- packet --audit <audit.json> --corpus
+  corpus/entries.json --json <packet.json> --html <packet.html> --size 12`.
+  Reviewers label only `light`, `dark`, or evidence-based `abstain`; evaluate a
+  completed submission with `color-scheme-calibrate evaluate`. The evaluator
+  binds the packet, audit, and current image bytes and emits `pass`, `fail`, or
+  `insufficient`; even `pass` is evidence for a later reviewed promotion, not
+  an automatic corpus write.
 - The current full-corpus decision is recorded and corpus-hash-bound in
   [retag-disposition-v1.json](/Users/olaniyi.oladokun/Downloads/clean-ui-mcp/docs/retag-disposition-v1.json).
   Validate it with `npm run retag-disposition`; regenerate only after an
@@ -82,6 +90,7 @@ by an explicitly reviewed promotion batch.
 ```text
 independent gold labels
   → frozen baseline and field floors
+  → deterministic colorScheme calibration packet and gate
   → immutable shadow run
   → human review / exact-ID decisions
   → 25-entry canary + restore rehearsal

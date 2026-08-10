@@ -648,6 +648,32 @@ run on the current default without changing it or accepting resume passes.
 
 ---
 
+## Deterministic color-scheme audit promotion handoff
+
+**What:** Connect the image-hash-bound color-scheme audit report to the reviewed
+retag-promotion workflow without allowing detector output to write the corpus
+directly.
+
+**Why:** The audit produces image-hash-bound deterministic proposals, conflicts,
+and abstentions, but it is not ground truth until colorScheme gold labels clear
+the calibration gate. `retag-promote` currently consumes shadow candidates plus
+explicit decisions and gold scores. Without a handoff, operators must
+manually translate a 787-entry report before any reviewed promotion.
+
+**Trigger (build when):** The deterministic audit has passed the gold/calibration
+gate and the next color-scheme cohort is ready for reviewed promotion.
+
+**Scope when triggered:** Add a decision/import shape that requires the audit's
+corpus hash, entry image SHA-256, detector provenance, and an explicit reviewer
+decision. Preserve `conflict`, `abstain`, missing-image, and error rows as
+non-promotable; emit a draft promotion artifact for the existing review path.
+
+**Depends on / blocked by:** The runtime audit report schema and provenance in
+PR #107; a reviewed decision format. Never promote directly from detector
+output.
+
+---
+
 ## Consensus ask for the model lane (Rule 2 branch 2, second half)
 
 **What:** A second independent ask for fields the model declines to confirm,

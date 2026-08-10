@@ -53,6 +53,7 @@
     "verify:estimate": "tsc && node dist/scripts/verify-corpus.js --estimate",
     "backfill-pilot": "tsc && node dist/scripts/backfill-pilot.js",
     "retag-shadow": "tsc && node dist/scripts/retag-shadow.js",
+    "color-scheme-audit": "tsc && node dist/scripts/color-scheme-audit.js",
     "retag-disposition": "tsc && node dist/scripts/retag-disposition.js",
     "retag-promote": "tsc && node dist/scripts/retag-promote.js",
     "retag-gold": "tsc && node dist/scripts/retag-gold.js",

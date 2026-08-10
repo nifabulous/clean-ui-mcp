@@ -678,6 +678,18 @@ promotion-grade one. The calibration packet is human-filled and image-hash
 bound; even `promotionEligible: true` is necessary but not sufficient for
 promotion. Never promote directly from detector output.
 
+**Current status: blocked on the detector, not on the harness.** The first
+calibration run (2026-08-10, reviewer `Gold`, packet `1110270c94eb4f68...`)
+returned `status: fail`, `accuracy: 0.75`, `promotionEligible: false`, and all
+three disagreements were detector errors on review, not reviewer errors.
+`color-scheme-v1` reads a whole-frame median luma, so a light-mode screen behind
+a dark photographic modal classifies as `dark` (median luma 0.00 and 1.21), and
+white-on-saturated-blue classifies as `dark` (91.35). Both were outside the
+abstention band, so the detector was confident and wrong. A replacement estimator
+has to sample UI chrome rather than the whole frame and carry a chroma term. See
+`docs/RETAG_PROGRAM.md` for the full result, including why that packet also
+proves nothing about dark detection (every gold label was `light`).
+
 ---
 
 ## Consensus ask for the model lane (Rule 2 branch 2, second half)

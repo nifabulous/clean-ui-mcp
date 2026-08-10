@@ -669,8 +669,11 @@ decision. Preserve `conflict`, `abstain`, missing-image, and error rows as
 non-promotable; emit a draft promotion artifact for the existing review path.
 
 **Depends on / blocked by:** The runtime audit report schema and provenance in
-PR #107; a reviewed decision format. Never promote directly from detector
-output.
+PR #107, plus a passing private calibration report from
+`color-scheme-calibrate evaluate` with the configured minimum scored labels and
+accuracy. The calibration packet is human-filled and image-hash bound; its
+`pass` status is necessary but not sufficient for promotion. Never promote
+directly from detector output.
 
 ---
 

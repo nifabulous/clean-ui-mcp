@@ -107,6 +107,7 @@ export const ColorSchemeCalibrationReportSchema = z.object({
   packetArtifactId: z.string().trim().min(1),
   packetSha256: Sha256Schema,
   submissionArtifactId: z.string().trim().min(1),
+  submissionSha256: Sha256Schema,
   reviewerId: z.string().trim().min(1),
   detector: z.object({
     source: z.literal("src/color-scheme.ts"),
@@ -127,8 +128,34 @@ export const ColorSchemeCalibrationReportSchema = z.object({
   if (report.counts.selected !== report.counts.scored + report.counts.abstained) ctx.addIssue({ code: "custom", path: ["counts", "selected"], message: "selected count must equal scored plus abstained" });
   const expectedAccuracy = report.counts.scored ? report.counts.correct / report.counts.scored : null;
   if (report.accuracy !== expectedAccuracy) ctx.addIssue({ code: "custom", path: ["accuracy"], message: "accuracy does not match counts" });
-  if (report.status === "pass" && (report.counts.scored < report.minimumScoredLabels || report.accuracy === null || report.accuracy < report.minimumAccuracy)) {
-    ctx.addIssue({ code: "custom", path: ["status"], message: "passing calibration reports must satisfy their configured gate" });
+  // A report is only evidence if its per-row decisions reconcile with its own
+  // totals. Without these checks a hand-authored report carrying nothing but
+  // favourable counts validates as `pass`.
+  if (report.decisions.length !== report.counts.selected) {
+    ctx.addIssue({ code: "custom", path: ["decisions"], message: "decisions must cover exactly the selected calibration rows" });
+  }
+  if (new Set(report.decisions.map((decision) => decision.entryId)).size !== report.decisions.length) {
+    ctx.addIssue({ code: "custom", path: ["decisions"], message: "calibration decisions must be unique per entry" });
+  }
+  const decidedAbstain = report.decisions.filter((decision) => decision.human === "abstain").length;
+  if (report.decisions.length === report.counts.selected && decidedAbstain !== report.counts.abstained) {
+    ctx.addIssue({ code: "custom", path: ["counts", "abstained"], message: "abstained count must equal the abstained decisions" });
+  }
+  const confusionTotal = report.confusion.expectedLight.light + report.confusion.expectedLight.dark + report.confusion.expectedDark.light + report.confusion.expectedDark.dark;
+  if (confusionTotal !== report.counts.scored) {
+    ctx.addIssue({ code: "custom", path: ["confusion"], message: "confusion cells must sum to the scored count" });
+  }
+  const confusionCorrect = report.confusion.expectedLight.light + report.confusion.expectedDark.dark;
+  if (confusionTotal === report.counts.scored && confusionCorrect !== report.counts.correct) {
+    ctx.addIssue({ code: "custom", path: ["confusion"], message: "confusion diagonal must equal the correct count" });
+  }
+  // Status is derived, not asserted: every branch is checked, so a forged
+  // status cannot disagree with the counts it is supposed to summarise.
+  const expectedStatus = report.counts.scored < report.minimumScoredLabels
+    ? "insufficient"
+    : report.accuracy !== null && report.accuracy >= report.minimumAccuracy ? "pass" : "fail";
+  if (report.status !== expectedStatus) {
+    ctx.addIssue({ code: "custom", path: ["status"], message: `status must be ${expectedStatus} for these counts and gate thresholds` });
   }
 });
 
@@ -144,6 +171,22 @@ export function sha256(value: string | Buffer): string {
 
 function entryRank(seed: string, entryId: string): string {
   return sha256(`${seed}:${entryId}`);
+}
+
+/**
+ * Serialise cohort rows in a fixed key order so `selectionSha256` never depends
+ * on the incidental agreement between an object literal and a Zod shape.
+ */
+function canonicalEntriesJson(entries: readonly ColorSchemeCalibrationPacketEntry[]): string {
+  return JSON.stringify(entries.map((entry) => ([
+    entry.entryId,
+    entry.imagePath,
+    entry.imageSha256,
+    entry.existingColorScheme,
+    entry.detectedColorScheme,
+    entry.medianLuma,
+    entry.stratum,
+  ])));
 }
 
 function validAuditEntries(report: ColorSchemeAuditReport): ColorSchemeAuditEntry[] {
@@ -203,7 +246,7 @@ export function buildColorSchemeCalibrationPacket(report: ColorSchemeAuditReport
   const parsed = ColorSchemeAuditReportSchema.parse(report);
   const entries = selectColorSchemeCalibrationEntries(parsed, size);
   if (entries.length === 0) throw new Error("color-scheme audit has no valid rows for calibration");
-  const selectionSha256 = sha256(JSON.stringify(entries));
+  const selectionSha256 = sha256(canonicalEntriesJson(entries));
   return ColorSchemeCalibrationPacketSchema.parse({
     schemaVersion: COLOR_SCHEME_CALIBRATION_SCHEMA_VERSION,
     artifactType: COLOR_SCHEME_CALIBRATION_PACKET_TYPE,
@@ -224,7 +267,15 @@ export function buildColorSchemeCalibrationPacket(report: ColorSchemeAuditReport
 function assertPacketBindsToAudit(audit: ColorSchemeAuditReport, auditSha256: string, packet: ColorSchemeCalibrationPacket, packetSha256: string): void {
   if (packet.auditArtifactId !== audit.artifactId) throw new Error("calibration packet belongs to a different audit artifact");
   if (packet.auditSha256 !== auditSha256) throw new Error("calibration packet audit hash does not match");
-  if (sha256(JSON.stringify(packet.entries)) !== packet.selectionSha256) throw new Error("calibration packet selection hash is invalid");
+  if (sha256(canonicalEntriesJson(packet.entries)) !== packet.selectionSha256) throw new Error("calibration packet selection hash is invalid");
+  // Self-consistency is not provenance: recomputing selectionSha256 over a
+  // hand-picked cohort would satisfy the check above. Re-derive the cohort the
+  // selector would have produced for this audit and require an exact match, so
+  // easy rows cannot be cherry-picked and strata cannot be relabelled.
+  const canonical = selectColorSchemeCalibrationEntries(audit, packet.entries.length);
+  if (canonical.length !== packet.entries.length || sha256(canonicalEntriesJson(canonical)) !== packet.selectionSha256) {
+    throw new Error("calibration packet is not the deterministic cohort for this audit");
+  }
   if (sha256(JSON.stringify(packet)) !== packetSha256) throw new Error("calibration packet hash does not match");
   const byId = new Map(audit.entries.map((entry) => [entry.entryId, entry]));
   for (const selected of packet.entries) {
@@ -285,6 +336,7 @@ export function evaluateColorSchemeCalibration(
     packetArtifactId: parsedPacket.artifactId,
     packetSha256,
     submissionArtifactId: parsedSubmission.artifactId,
+    submissionSha256: sha256(JSON.stringify(parsedSubmission)),
     reviewerId: parsedSubmission.reviewerId,
     detector: parsedAudit.detector,
     minimumScoredLabels,

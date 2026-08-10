@@ -50,4 +50,35 @@ describe("color scheme calibration HTML", () => {
     expect(dom.window.document.querySelector("#progress")?.textContent).toBe("1 / 1 complete");
     dom.window.close();
   });
+
+  it("never embeds the detector answer or the existing corpus value in the reviewer page", () => {
+    const packet = buildColorSchemeCalibrationPacket(audit, "c".repeat(64), 1);
+    const html = buildColorSchemeCalibrationHtml(packet, new Map([["one", "file:///tmp/one.png"]]));
+    // The page instructs the reviewer to ignore the detector and the corpus value.
+    // Shipping either one inside the page contradicts that instruction.
+    expect(html).not.toContain("detectedColorScheme");
+    expect(html).not.toContain("existingColorScheme");
+    expect(html).not.toContain("medianLuma");
+    expect(html).toContain(packet.entries[0]!.imageSha256);
+  });
+
+  it("marks a completed card and scrolls to the next incomplete entry", () => {
+    const packet = buildColorSchemeCalibrationPacket(audit, "c".repeat(64), 1);
+    const html = buildColorSchemeCalibrationHtml(packet, new Map([["one", "file:///tmp/one.png"]]));
+    const dom = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/" });
+    const doc = dom.window.document;
+    let scrolled = 0;
+    doc.querySelectorAll("article.entry").forEach((card) => {
+      (card as unknown as { scrollIntoView: () => void }).scrollIntoView = () => { scrolled += 1; };
+    });
+    (doc.querySelector("#jump") as HTMLButtonElement).click();
+    expect(scrolled).toBe(1);
+
+    const radio = doc.querySelector('input[name="scheme-one"][value="light"]') as HTMLInputElement;
+    radio.checked = true;
+    radio.dispatchEvent(new dom.window.Event("change"));
+    expect(doc.querySelector("#progress")?.textContent).toBe("1 / 1 complete");
+    expect(doc.querySelectorAll("article.entry.complete")).toHaveLength(1);
+    dom.window.close();
+  });
 });

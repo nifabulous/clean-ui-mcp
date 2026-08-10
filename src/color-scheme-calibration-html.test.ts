@@ -107,33 +107,119 @@ describe("color scheme calibration HTML", () => {
     dom.window.close();
   });
 
-  it("keeps each reviewer's draft separate", () => {
+  it("keeps a reviewer's labels when they identify themselves after labeling", () => {
     const packet = buildColorSchemeCalibrationPacket(audit, "c".repeat(64), 1);
     const html = buildColorSchemeCalibrationHtml(packet, new Map([["one", "file:///tmp/one.png"]]));
     const dom = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/" });
     const doc = dom.window.document;
+    const radio = doc.querySelector('input[name="scheme-one"][value="light"]') as HTMLInputElement;
+    radio.checked = true;
+    radio.dispatchEvent(new dom.window.Event("change"));
+    expect(doc.querySelector("#progress")?.textContent).toBe("1 / 1 complete");
+
+    // Labeling first and typing the reviewer ID afterwards is the natural order.
+    // Adopting an empty draft for the newly typed ID would silently destroy the
+    // reviewer's hand-entered gold labels.
     const reviewer = doc.querySelector("#reviewer") as HTMLInputElement;
-    const pick = (value: string) => {
-      const input = doc.querySelector(`input[name="scheme-one"][value="${value}"]`) as HTMLInputElement;
-      input.checked = true;
-      input.dispatchEvent(new dom.window.Event("change"));
-    };
+    for (const prefix of ["a", "al", "ali", "alic", "alice"]) {
+      reviewer.value = prefix;
+      reviewer.dispatchEvent(new dom.window.Event("input"));
+      expect(doc.querySelector("#progress")?.textContent).toBe("1 / 1 complete");
+    }
+    // Correcting a typo in the ID must not discard the work either.
+    reviewer.value = "alic";
+    reviewer.dispatchEvent(new dom.window.Event("input"));
+    expect(doc.querySelector("#progress")?.textContent).toBe("1 / 1 complete");
+    expect(radio.checked).toBe(true);
+
+    const built = (dom.window as unknown as { buildSubmission: () => { errors: string[] } }).buildSubmission();
+    expect(built.errors).toEqual([]);
+    dom.window.close();
+  });
+
+  it("does not show one reviewer's stored draft to another reviewer", () => {
+    const packet = buildColorSchemeCalibrationPacket(audit, "c".repeat(64), 1);
+    const html = buildColorSchemeCalibrationHtml(packet, new Map([["one", "file:///tmp/one.png"]]));
+    const sha = html.match(/packetSha256":"([a-f0-9]{64})"/)?.[1];
+    // Alice's draft is already on disk and Bob opens the packet fresh, which is
+    // how two reviewers actually share a machine.
+    const dom = new JSDOM("<!doctype html><body>", { runScripts: "dangerously", url: "http://localhost/" });
+    dom.window.localStorage.setItem(`color-scheme-calibration:${sha}`, JSON.stringify({
+      drafts: { alice: { one: { value: "light", note: "" } } },
+    }));
+    dom.window.document.open();
+    dom.window.document.write(html);
+    dom.window.document.close();
+    const doc = dom.window.document;
+    const reviewer = doc.querySelector("#reviewer") as HTMLInputElement;
     const setReviewer = (id: string) => {
       reviewer.value = id;
       reviewer.dispatchEvent(new dom.window.Event("input"));
     };
-    setReviewer("alice");
-    pick("light");
-    expect(doc.querySelector("#progress")?.textContent).toBe("1 / 1 complete");
-
-    // Bob opening the same packet in the same browser must not inherit Alice's
-    // labels; independent gold labels are the whole point of the packet.
+    expect(doc.querySelector("#progress")?.textContent).toBe("0 / 1 complete");
     setReviewer("bob");
     expect(doc.querySelector("#progress")?.textContent).toBe("0 / 1 complete");
     expect([...doc.querySelectorAll<HTMLInputElement>('input[type="radio"]')].some((input) => input.checked)).toBe(false);
-
+    // Alice's own draft still comes back for Alice.
     setReviewer("alice");
     expect(doc.querySelector("#progress")?.textContent).toBe("1 / 1 complete");
+    dom.window.close();
+  });
+
+  it("keeps the download blob alive until after the click", () => {
+    const packet = buildColorSchemeCalibrationPacket(audit, "c".repeat(64), 1);
+    const html = buildColorSchemeCalibrationHtml(packet, new Map([["one", "file:///tmp/one.png"]]));
+    const dom = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/" });
+    const doc = dom.window.document;
+    const order: string[] = [];
+    (dom.window.URL as unknown as { createObjectURL: (b: unknown) => string }).createObjectURL = () => { order.push("create"); return "blob:stub"; };
+    (dom.window.URL as unknown as { revokeObjectURL: (u: string) => void }).revokeObjectURL = () => { order.push("revoke"); };
+    const reviewer = doc.querySelector("#reviewer") as HTMLInputElement;
+    reviewer.value = "alice";
+    reviewer.dispatchEvent(new dom.window.Event("input"));
+    const radio = doc.querySelector('input[name="scheme-one"][value="light"]') as HTMLInputElement;
+    radio.checked = true;
+    radio.dispatchEvent(new dom.window.Event("change"));
+
+    let clickedWhileAttached = false;
+    const realClick = dom.window.HTMLAnchorElement.prototype.click;
+    dom.window.HTMLAnchorElement.prototype.click = function patched(this: HTMLAnchorElement) {
+      clickedWhileAttached = this.isConnected;
+      order.push("click");
+    };
+    (doc.querySelector("#download") as HTMLButtonElement).click();
+    dom.window.HTMLAnchorElement.prototype.click = realClick;
+
+    // Revoking synchronously after click, or clicking a detached anchor, is how
+    // blob downloads silently fail in real browsers.
+    expect(clickedWhileAttached).toBe(true);
+    expect(order.indexOf("click")).toBeGreaterThan(order.indexOf("create"));
+    expect(order).not.toContain("revoke");
+    dom.window.close();
+  });
+
+  it("offers a selectable textarea when the clipboard is unavailable", async () => {
+    const packet = buildColorSchemeCalibrationPacket(audit, "c".repeat(64), 1);
+    const html = buildColorSchemeCalibrationHtml(packet, new Map([["one", "file:///tmp/one.png"]]));
+    const dom = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/" });
+    dom.window.alert = () => {};
+    const doc = dom.window.document;
+    Object.defineProperty(dom.window.navigator, "clipboard", { value: undefined, configurable: true });
+    (doc as unknown as { execCommand: () => boolean }).execCommand = () => false;
+    const reviewer = doc.querySelector("#reviewer") as HTMLInputElement;
+    reviewer.value = "alice";
+    reviewer.dispatchEvent(new dom.window.Event("input"));
+    const radio = doc.querySelector('input[name="scheme-one"][value="light"]') as HTMLInputElement;
+    radio.checked = true;
+    radio.dispatchEvent(new dom.window.Event("change"));
+    await (dom.window as unknown as { copyJson: () => Promise<void> }).copyJson();
+    // Hand-entered gold labels must always be extractable, even when both the
+    // clipboard API and execCommand are blocked.
+    const fallback = doc.querySelector("#manual-json") as HTMLTextAreaElement | null;
+    expect(fallback).not.toBeNull();
+    const payload = JSON.parse(fallback!.value) as { labels: unknown[] };
+    expect(payload.labels).toHaveLength(1);
+    expect(ColorSchemeCalibrationSubmissionSchema.safeParse(payload).success).toBe(true);
     dom.window.close();
   });
 

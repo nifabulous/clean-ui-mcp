@@ -3,11 +3,12 @@
  * Build and evaluate the private human calibration packet for colorScheme.
  * This command never mutates corpus/entries.json or any image.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { dirname, isAbsolute, resolve, sep } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertSafeOutputPath } from "./color-scheme-audit.js";
+import { assertCorpusImagePath, isWithin } from "../corpus-image-paths.js";
 import {
   buildColorSchemeCalibrationPacket,
   canonicalArtifactJson,
@@ -36,21 +37,8 @@ function readAudit(path: string): ParsedAudit {
   return { audit, auditSha256: sha256(canonicalArtifactJson(audit)) };
 }
 
-function isWithin(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(root + sep);
-}
-
 function imagePathFor(corpusRoot: string, relativePath: string): string {
-  const segments = relativePath.split(/[\\/]/);
-  if (isAbsolute(relativePath) || segments.some((segment) => segment === "." || segment === "..") || (!relativePath.startsWith("images-private/") && !relativePath.startsWith("images-public/"))) {
-    throw new Error(`unsafe calibration image path: ${relativePath}`);
-  }
-  const realCorpusRoot = realpathSync(corpusRoot);
-  const absolute = resolve(corpusRoot, relativePath);
-  if (!existsSync(absolute)) throw new Error(`calibration image is missing: ${absolute}`);
-  const realImage = realpathSync(absolute);
-  if (!isWithin(realCorpusRoot, realImage)) throw new Error(`calibration image escapes corpus root: ${relativePath}`);
-  return realImage;
+  return assertCorpusImagePath(corpusRoot, relativePath, { requireExists: true, label: "calibration" });
 }
 
 function assertPacketImagesCurrent(packet: ColorSchemeCalibrationPacket, corpusRoot: string): Map<string, string> {

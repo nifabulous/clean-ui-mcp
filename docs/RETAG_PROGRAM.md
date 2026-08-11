@@ -108,6 +108,18 @@ agreement into false ground truth.
   `src/decision-lab.ts` lists `colorScheme` in `CITABLE_EXTRACTION_KEYS` and
   performs no `isVerified` check, so before this change the detector's answer was
   cited into synthesis prompts with no verification gate at all.
+- **Why this gate is stricter than the serving floors.** `promotionEligible`
+  requires accuracy 1.0, where the nine detectors in
+  `src/verify/detector-registry.ts` carry serving floors of 0.7 to 0.9. The
+  difference is what the number authorizes: those floors decide whether a
+  detector may affirm a field at serving time, where a wrong answer degrades one
+  response; this gate would authorize a one-way corpus write across hundreds of
+  rows. It also now requires at least one scored gold label in each of `light`
+  and `dark` (`minimumPerClass`), because a single-class cohort carries no
+  evidence about the other class — the first run was 12 light and 0 dark, where
+  a constant `"light"` would have scored 12/12. Treat 1.0 as provisional: it is
+  a judgement, not a measured floor, and the honest way to set it is the
+  `held-out-lock.json` pattern the verifier lane already uses.
 - **A field only reaches a consumer with a verification record.**
   `isVerified` (`src/corpus-trust.ts:154`) returns false without
   `provenance.verification[field]`. Of 787 entries, 22 carry a `colorScheme`

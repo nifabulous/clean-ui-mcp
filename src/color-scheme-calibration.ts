@@ -7,6 +7,7 @@ import {
   COLOR_SCHEME_THRESHOLD,
   type ColorScheme,
 } from "./color-scheme.js";
+import { canonicalJsonStringify } from "./readiness/contracts.js";
 import {
   ColorSchemeAuditReportSchema,
   type ColorSchemeAuditEntry,
@@ -30,15 +31,24 @@ export type ColorSchemeCalibrationStratum = "threshold-near" | "existing-value" 
 export const COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR = {
   minimumScoredLabels: 12,
   minimumAccuracy: 1,
+  /** Scored gold labels required in EACH class; a single-class cohort proves nothing about the other. */
+  minimumPerClass: 1,
 } as const;
 
 /**
  * The one serialisation used for every calibration artifact: what the CLI writes
  * to disk, and what the recorded SHA-256 digests hash. `sha256sum <file>` on a
  * packet or report therefore reproduces the digest the artifact family records.
+ *
+ * Delegates to the repo-wide `canonicalJsonStringify` (src/readiness/contracts.ts)
+ * rather than defining a second convention. That function sorts keys, so the
+ * digest is independent of construction order instead of relying on Zod emitting
+ * keys in shape order. This repo has already paid for two disagreeing
+ * canonicalisers once: retag-shadow and retag-diff hashed the same corpus value
+ * differently on all 787 entries and made a promotion gate unsatisfiable.
  */
 export function canonicalArtifactJson(artifact: unknown): string {
-  return JSON.stringify(artifact, null, 2) + "\n";
+  return canonicalJsonStringify(artifact) + "\n";
 }
 
 /** Order IDs by UTF-16 code unit so cohort selection cannot vary with host locale or ICU version. */
@@ -51,10 +61,21 @@ function deriveCalibrationStatus(scored: number, accuracy: number | null, minimu
   return accuracy !== null && accuracy >= minimumAccuracy ? "pass" : "fail";
 }
 
-function deriveCalibrationPromotionEligible(status: string, minimumScoredLabels: number, minimumAccuracy: number): boolean {
+function deriveCalibrationPromotionEligible(
+  status: string,
+  minimumScoredLabels: number,
+  minimumAccuracy: number,
+  scoredByHumanValue: { light: number; dark: number },
+): boolean {
+  // Class balance is part of the floor, not a footnote. A cohort whose gold
+  // labels are all one class carries no evidence about the other, so a perfect
+  // score on it cannot authorize a corpus-wide fill. The first real run was
+  // 12 light / 0 dark, where a constant "light" would also have scored 12/12.
   return status === "pass"
     && minimumScoredLabels >= COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR.minimumScoredLabels
-    && minimumAccuracy >= COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR.minimumAccuracy;
+    && minimumAccuracy >= COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR.minimumAccuracy
+    && scoredByHumanValue.light >= COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR.minimumPerClass
+    && scoredByHumanValue.dark >= COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR.minimumPerClass;
 }
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/, "expected a lowercase SHA-256 hash");
@@ -154,7 +175,14 @@ export const ColorSchemeCalibrationReportSchema = z.object({
   }).strict(),
   minimumScoredLabels: z.number().int().positive(),
   minimumAccuracy: z.number().finite().min(0).max(1),
-  counts: z.object({ selected: z.number().int().nonnegative(), scored: z.number().int().nonnegative(), correct: z.number().int().nonnegative(), incorrect: z.number().int().nonnegative(), abstained: z.number().int().nonnegative() }).strict(),
+  counts: z.object({
+    selected: z.number().int().nonnegative(),
+    scored: z.number().int().nonnegative(),
+    correct: z.number().int().nonnegative(),
+    incorrect: z.number().int().nonnegative(),
+    abstained: z.number().int().nonnegative(),
+    scoredByHumanValue: z.object({ light: z.number().int().nonnegative(), dark: z.number().int().nonnegative() }).strict(),
+  }).strict(),
   accuracy: z.number().finite().min(0).max(1).nullable(),
   confusion: z.object({ expectedLight: ConfusionRowSchema, expectedDark: ConfusionRowSchema }).strict(),
   status: z.enum(["pass", "fail", "insufficient"]),
@@ -192,7 +220,11 @@ export const ColorSchemeCalibrationReportSchema = z.object({
   if (report.status !== expectedStatus) {
     ctx.addIssue({ code: "custom", path: ["status"], message: `status must be ${expectedStatus} for these counts and gate thresholds` });
   }
-  const expectedEligible = deriveCalibrationPromotionEligible(expectedStatus, report.minimumScoredLabels, report.minimumAccuracy);
+  const byClass = report.counts.scoredByHumanValue;
+  if (byClass.light + byClass.dark !== report.counts.scored) {
+    ctx.addIssue({ code: "custom", path: ["counts", "scoredByHumanValue"], message: "per-class scored counts must sum to the scored count" });
+  }
+  const expectedEligible = deriveCalibrationPromotionEligible(expectedStatus, report.minimumScoredLabels, report.minimumAccuracy, byClass);
   if (report.promotionEligible !== expectedEligible) {
     ctx.addIssue({
       code: "custom",
@@ -310,6 +342,13 @@ function assertPacketBindsToAudit(audit: ColorSchemeAuditReport, auditSha256: st
   // only "bound to whatever string the caller passed as the audit hash".
   if (sha256(canonicalArtifactJson(audit)) !== auditSha256) throw new Error("supplied audit hash does not hash the supplied audit");
   if (packet.auditSha256 !== auditSha256) throw new Error("calibration packet audit hash does not match");
+  const byId = new Map(audit.entries.map((entry) => [entry.entryId, entry]));
+  for (const selected of packet.entries) {
+    const entry = byId.get(selected.entryId);
+    if (!entry || entry.imagePath !== selected.imagePath || entry.imageSha256 !== selected.imageSha256 || entry.detectedColorScheme !== selected.detectedColorScheme || entry.medianLuma !== selected.medianLuma) {
+      throw new Error(`calibration packet row does not match audit for ${selected.entryId}`);
+    }
+  }
   if (sha256(canonicalEntriesJson(packet.entries)) !== packet.selectionSha256) throw new Error("calibration packet selection hash is invalid");
   // Self-consistency is not provenance: recomputing selectionSha256 over a
   // hand-picked cohort would satisfy the check above. Re-derive the cohort the
@@ -320,13 +359,6 @@ function assertPacketBindsToAudit(audit: ColorSchemeAuditReport, auditSha256: st
     throw new Error("calibration packet is not the deterministic cohort for this audit");
   }
   if (sha256(canonicalArtifactJson(packet)) !== packetSha256) throw new Error("calibration packet hash does not match");
-  const byId = new Map(audit.entries.map((entry) => [entry.entryId, entry]));
-  for (const selected of packet.entries) {
-    const entry = byId.get(selected.entryId);
-    if (!entry || entry.imagePath !== selected.imagePath || entry.imageSha256 !== selected.imageSha256 || entry.detectedColorScheme !== selected.detectedColorScheme || entry.medianLuma !== selected.medianLuma) {
-      throw new Error(`calibration packet row does not match audit for ${selected.entryId}`);
-    }
-  }
 }
 
 export function evaluateColorSchemeCalibration(
@@ -363,6 +395,8 @@ export function evaluateColorSchemeCalibration(
     }
     return { entryId: label.entryId, human: label.value, detected: selected.detectedColorScheme };
   });
+  const scoredByHumanValue = { light: 0, dark: 0 };
+  for (const label of parsedSubmission.labels) if (label.value !== "abstain") scoredByHumanValue[label.value] += 1;
   const scored = correct + incorrect;
   const minimumScoredLabels = options.minimumScoredLabels ?? 12;
   const minimumAccuracy = options.minimumAccuracy ?? 1;
@@ -384,11 +418,11 @@ export function evaluateColorSchemeCalibration(
     detector: parsedAudit.detector,
     minimumScoredLabels,
     minimumAccuracy,
-    counts: { selected: parsedPacket.entries.length, scored, correct, incorrect, abstained },
+    counts: { selected: parsedPacket.entries.length, scored, correct, incorrect, abstained, scoredByHumanValue },
     accuracy,
     confusion,
     status,
     decisions,
-    promotionEligible: deriveCalibrationPromotionEligible(status, minimumScoredLabels, minimumAccuracy),
+    promotionEligible: deriveCalibrationPromotionEligible(status, minimumScoredLabels, minimumAccuracy, scoredByHumanValue),
   });
 }

@@ -112,3 +112,29 @@ describe("color scheme calibration CLI", () => {
     expect(JSON.parse(readFileSync(reportPath, "utf8"))).toMatchObject({ status: "pass", promotionEligible: false });
   }, 180_000);
 });
+
+describe("color scheme calibration CLI argument and path guards", () => {
+  const root = mkdtempSync(join(tmpdir(), "clean-ui-color-calibrate-guards-"));
+
+  // Two usage-string assertions (unknown mode, missing --audit) were dropped:
+  // each cost a full `tsc && node` subprocess to assert error text for a
+  // developer typo, with no safety property behind it, and the extra
+  // invocations made the suite flaky against runCli's 120s timeout.
+  it("refuses gate thresholds outside their valid range", async () => {
+    const corpusRoot = join(root, "corpus");
+    mkdirSync(join(corpusRoot, "images-private"), { recursive: true });
+    const bytes = Buffer.from("guard-image");
+    writeFileSync(join(corpusRoot, "images-private", "one.png"), bytes);
+    writeFileSync(join(corpusRoot, "entries.json"), JSON.stringify({ entries: [{ id: "one", image: { path: "images-private/one.png" } }] }));
+    const audit = await buildColorSchemeAuditReport({
+      corpusSha256: hash("corpus"),
+      entries: [{ entryId: "one", imagePath: "images-private/one.png", imageSha256: hash(bytes), existingColorScheme: null }],
+      detect: async () => ({ colorScheme: "light", medianLuma: 220, threshold: 110, margin: 12 }),
+    });
+    const auditPath = join(root, "audit.json");
+    writeFileSync(auditPath, canonicalArtifactJson(audit));
+    const bad = runCli(["packet", "--audit", auditPath, "--corpus", join(corpusRoot, "entries.json"), "--json", join(root, "p.json"), "--size", "0"]);
+    expect(bad.status).not.toBe(0);
+    expect(bad.stderr).toMatch(/--size must be a positive integer/);
+  }, 120_000);
+});

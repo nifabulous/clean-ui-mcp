@@ -308,7 +308,7 @@ describe("color scheme calibration", () => {
       detector: { source: "src/color-scheme.ts", algorithmVersion: "color-scheme-v1", maxDimension: COLOR_SCHEME_MAX_DIMENSION, threshold: COLOR_SCHEME_THRESHOLD, margin: COLOR_SCHEME_MARGIN },
       minimumScoredLabels: 12,
       minimumAccuracy: 1,
-      counts: { selected: 12, scored: 12, correct: 12, incorrect: 0, abstained: 0 },
+      counts: { selected: 12, scored: 12, correct: 12, incorrect: 0, abstained: 0, scoredByHumanValue: { light: 6, dark: 6 } },
       accuracy: 1,
       confusion: { expectedLight: { light: 0, dark: 0 }, expectedDark: { light: 0, dark: 0 } },
       status: "pass",
@@ -340,7 +340,7 @@ describe("color scheme calibration", () => {
     expect(lax.status).toBe("pass");
     expect(lax.counts.correct).toBe(0);
     expect(lax.promotionEligible).toBe(false);
-    expect(COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR).toEqual({ minimumScoredLabels: 12, minimumAccuracy: 1 });
+    expect(COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR).toEqual({ minimumScoredLabels: 12, minimumAccuracy: 1, minimumPerClass: 1 });
   });
 
   it("marks a report at the promotion floor as promotion eligible", async () => {
@@ -381,7 +381,7 @@ describe("color scheme calibration", () => {
       detector: { source: "src/color-scheme.ts", algorithmVersion: "color-scheme-v1", maxDimension: COLOR_SCHEME_MAX_DIMENSION, threshold: COLOR_SCHEME_THRESHOLD, margin: COLOR_SCHEME_MARGIN },
       minimumScoredLabels: 1,
       minimumAccuracy: 0,
-      counts: { selected: 1, scored: 1, correct: 0, incorrect: 1, abstained: 0 },
+      counts: { selected: 1, scored: 1, correct: 0, incorrect: 1, abstained: 0, scoredByHumanValue: { light: 1, dark: 0 } },
       accuracy: 0,
       confusion: { expectedLight: { light: 0, dark: 1 }, expectedDark: { light: 0, dark: 0 } },
       status: "pass",
@@ -458,7 +458,7 @@ describe("color scheme calibration", () => {
     const packet = buildColorSchemeCalibrationPacket(audit, auditHash(audit), 2);
     // sha256sum on the written file must reproduce the digest the artifact
     // family records, or the provenance is unverifiable outside this codebase.
-    const fileBytes = JSON.stringify(packet, null, 2) + "\n";
+    const fileBytes = canonicalArtifactJson(packet);
     expect(artifactHash(packet)).toBe(createHash("sha256").update(fileBytes).digest("hex"));
     expect(canonicalArtifactJson(packet)).toBe(fileBytes);
   });
@@ -478,5 +478,113 @@ describe("color scheme calibration", () => {
     const ids = selectColorSchemeCalibrationEntries(audit, 3).map((entry) => entry.entryId);
     const byCodeUnit = ["B-upper", "a-lower", "_underscore"].sort();
     expect(ids[0]).toBe(byCodeUnit[0]);
+  });
+});
+
+describe("color scheme calibration error paths", () => {
+  const okSubmission = (packet: { artifactId: string; entries: ReadonlyArray<{ entryId: string; imageSha256: string; detectedColorScheme: "light" | "dark" }> }, packetSha256: string, over: Record<string, unknown> = {}) => ({
+    schemaVersion: "1.0", artifactType: "color-scheme-calibration-submission", artifactId: "s-v1",
+    packetArtifactId: packet.artifactId, packetSha256, reviewerId: "probe", sealedAt: "2026-08-10T10:00:00.000Z",
+    labels: packet.entries.map((e) => ({ entryId: e.entryId, imageSha256: e.imageSha256, value: e.detectedColorScheme })),
+    ...over,
+  }) as ColorSchemeCalibrationSubmission;
+
+  it("refuses a selection size that is not a positive integer", async () => {
+    const audit = await auditFixture();
+    expect(() => selectColorSchemeCalibrationEntries(audit, 0)).toThrow(/positive integer/);
+    expect(() => selectColorSchemeCalibrationEntries(audit, 1.5)).toThrow(/positive integer/);
+  });
+
+  it("refuses to build a packet from an audit with no valid rows", async () => {
+    const empty = await buildColorSchemeAuditReport({
+      corpusSha256: hash("a"),
+      entries: [{ entryId: "only", imagePath: null, imageSha256: null, existingColorScheme: null }],
+      detect: async () => ({ colorScheme: "light", medianLuma: 200, threshold: COLOR_SCHEME_THRESHOLD, margin: COLOR_SCHEME_MARGIN }),
+    });
+    expect(() => buildColorSchemeCalibrationPacket(empty, auditHash(empty), 4)).toThrow(/no valid rows/);
+  });
+
+  it("refuses a packet whose recorded packet hash does not match", async () => {
+    const audit = await auditFixture();
+    const packet = buildColorSchemeCalibrationPacket(audit, auditHash(audit), 4);
+    expect(() => evaluateColorSchemeCalibration(audit, auditHash(audit), packet, okSubmission(packet, hash("9")), { packetSha256: hash("9") }))
+      .toThrow(/packet hash does not match/);
+  });
+
+  it("refuses a packet claiming a different audit artifact", async () => {
+    const audit = await auditFixture();
+    const packet = buildColorSchemeCalibrationPacket(audit, auditHash(audit), 4);
+    const foreign = { ...packet, auditArtifactId: "some-other-audit" };
+    const sha = artifactHash(foreign);
+    expect(() => evaluateColorSchemeCalibration(audit, auditHash(audit), foreign as never, okSubmission(foreign, sha), { packetSha256: sha }))
+      .toThrow(/different audit artifact/);
+  });
+
+  it("refuses a packet whose recorded audit hash disagrees with the caller's", async () => {
+    const audit = await auditFixture();
+    const packet = buildColorSchemeCalibrationPacket(audit, auditHash(audit), 4);
+    const swapped = { ...packet, auditSha256: hash("5") };
+    const sha = artifactHash(swapped);
+    expect(() => evaluateColorSchemeCalibration(audit, auditHash(audit), swapped as never, okSubmission(swapped, sha), { packetSha256: sha }))
+      .toThrow(/audit hash does not match/);
+  });
+
+  it("refuses a packet row that disagrees with the audit", async () => {
+    const audit = await auditFixture();
+    const packet = buildColorSchemeCalibrationPacket(audit, auditHash(audit), 4);
+    const tampered = { ...packet, entries: packet.entries.map((e, i) => (i === 0 ? { ...e, imageSha256: hash("7") } : e)) };
+    const sha = artifactHash(tampered);
+    // The per-row check runs before the selection hash, so the error names the row.
+    expect(() => evaluateColorSchemeCalibration(audit, auditHash(audit), tampered as never, okSubmission(tampered, sha), { packetSha256: sha }))
+      .toThrow(/row does not match audit for/);
+  });
+
+  it("refuses a submission bound to a different packet", async () => {
+    const audit = await auditFixture();
+    const packet = buildColorSchemeCalibrationPacket(audit, auditHash(audit), 4);
+    const sha = artifactHash(packet);
+    expect(() => evaluateColorSchemeCalibration(audit, auditHash(audit), packet, okSubmission(packet, sha, { packetArtifactId: "elsewhere" }), { packetSha256: sha }))
+      .toThrow(/different calibration packet/);
+  });
+
+  it("refuses a submission carrying a stale packet hash", async () => {
+    const audit = await auditFixture();
+    const packet = buildColorSchemeCalibrationPacket(audit, auditHash(audit), 4);
+    const sha = artifactHash(packet);
+    expect(() => evaluateColorSchemeCalibration(audit, auditHash(audit), packet, okSubmission(packet, hash("6")), { packetSha256: sha }))
+      .toThrow(/submission packet hash does not match/);
+  });
+
+  it("refuses gate thresholds outside their valid range", async () => {
+    const audit = await auditFixture();
+    const packet = buildColorSchemeCalibrationPacket(audit, auditHash(audit), 4);
+    const sha = artifactHash(packet);
+    const sub = okSubmission(packet, sha);
+    expect(() => evaluateColorSchemeCalibration(audit, auditHash(audit), packet, sub, { packetSha256: sha, minimumScoredLabels: 0 }))
+      .toThrow(/minimumScoredLabels must be a positive integer/);
+    expect(() => evaluateColorSchemeCalibration(audit, auditHash(audit), packet, sub, { packetSha256: sha, minimumAccuracy: 1.5 }))
+      .toThrow(/minimumAccuracy must be between 0 and 1/);
+  });
+
+  it("refuses an abstain label with no reason, and a note on a decided label", () => {
+    const base = { entryId: "one", imageSha256: hash("b") };
+    expect(ColorSchemeCalibrationSubmissionSchema.safeParse({
+      schemaVersion: "1.0", artifactType: "color-scheme-calibration-submission", artifactId: "s", packetArtifactId: "p",
+      packetSha256: hash("c"), reviewerId: "r", sealedAt: "2026-08-10T10:00:00.000Z",
+      labels: [{ ...base, value: "abstain" }],
+    }).success).toBe(false);
+    expect(ColorSchemeCalibrationSubmissionSchema.safeParse({
+      schemaVersion: "1.0", artifactType: "color-scheme-calibration-submission", artifactId: "s", packetArtifactId: "p",
+      packetSha256: hash("c"), reviewerId: "r", sealedAt: "2026-08-10T10:00:00.000Z",
+      labels: [{ ...base, value: "light", note: "not allowed here" }],
+    }).success).toBe(false);
+  });
+
+  it("refuses a packet whose detector constants drift from the compiled detector", async () => {
+    const audit = await auditFixture();
+    const packet = buildColorSchemeCalibrationPacket(audit, auditHash(audit), 4);
+    for (const drift of [{ threshold: 99 }, { margin: 99 }, { maxDimension: 99 }]) {
+      expect(ColorSchemeCalibrationPacketSchema.safeParse({ ...packet, detector: { ...packet.detector, ...drift } }).success).toBe(false);
+    }
   });
 });

@@ -688,7 +688,13 @@ white-on-saturated-blue classifies as `dark` (91.35). Both were outside the
 abstention band, so the detector was confident and wrong. A replacement estimator
 has to sample UI chrome rather than the whole frame and carry a chroma term. See
 `docs/RETAG_PROGRAM.md` for the full result, including why that packet also
-proves nothing about dark detection (every gold label was `light`).
+proves nothing about dark detection (every gold label was `light`). Note the
+sharper reading: because every gold label was `light`, a constant `return "light"`
+scores 12/12 against the detector's 9/12, so the run ranks the detector below a
+one-liner rather than establishing an accuracy for it. `src/tagger.ts` no longer
+stamps the detector's answer over the model's; that also closed an ungated
+citation path through `src/decision-lab.ts`, which cites `colorScheme` with no
+`isVerified` check.
 
 ---
 

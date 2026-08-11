@@ -94,6 +94,29 @@ agreement into false ground truth.
   Both modes landed **outside** the abstention band (`|luma - 110| < 12`, so
   98-122), meaning the detector was confident and wrong rather than uncertain.
   The audit abstained 0 times across all 787 entries.
+- **What that run does and does not establish.** It ranks; it does not verdict.
+  Every human label was `light`, so the trivial baseline `return "light"` scores
+  **12/12** on the same packet against the detector's **9/12**: the only human
+  evidence in existence puts `color-scheme-v1` below a one-line constant. It
+  cannot show the detector is sound either, because 12 rows deliberately
+  stratified toward the hardest cases give a Wilson 95% interval of roughly
+  0.47-0.92 and no dark-class labels at all. Read it as "not fit to be the field
+  value", not as a measured accuracy for the corpus.
+- **Consequence, shipped.** `src/tagger.ts` no longer overwrites the vision
+  model's `colorScheme` with the detector's answer. The detection is still
+  recorded in the run report as evidence. This matters beyond the corpus:
+  `src/decision-lab.ts` lists `colorScheme` in `CITABLE_EXTRACTION_KEYS` and
+  performs no `isVerified` check, so before this change the detector's answer was
+  cited into synthesis prompts with no verification gate at all.
+- **A field only reaches a consumer with a verification record.**
+  `isVerified` (`src/corpus-trust.ts:154`) returns false without
+  `provenance.verification[field]`. Of 787 entries, 22 carry a `colorScheme`
+  value and **10** carry a valid record, so 10 serve it. Filling the 765 empty
+  rows from detector output would therefore change nothing for any caller unless
+  the migration also wrote verification records, and writing those from detector
+  output is the trust laundering `src/verification-carry.ts` exists to prevent.
+  That is the real reason the fill is blocked, and it is stronger than the
+  accuracy argument.
 - **That run also cannot speak to dark detection.** Every human label was
   `light`, so the report's confusion matrix reads
   `expectedLight {light: 9, dark: 3}, expectedDark {light: 0, dark: 0}`. A

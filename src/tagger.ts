@@ -2986,9 +2986,15 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   }
 
   const extraction = sanitizeTaggerPayload(extractionParsed);
-  // Page-level theme is deterministic pixel evidence. A near-threshold or
-  // failed measurement is an honest absence; never retain the model's guess.
-  extraction.colorScheme = colorSchemeDetection?.colorScheme ?? "";
+  // The model's colorScheme stands. This line used to overwrite it with
+  // color-scheme-v1's median-luma answer, on the reasoning that pixel evidence
+  // beats a model guess. Human calibration measured the opposite: on 12 real
+  // screenshots the detector scored 9/12 while a constant "light" scores 12/12
+  // on the same labels, and its errors were confident rather than abstentions
+  // (light chrome behind a dark photographic modal read as dark; white on
+  // saturated blue read as dark). The detection is still recorded in the run
+  // report below as evidence, and it is still cited by decision-lab, so it must
+  // not also masquerade as the field value. See docs/RETAG_PROGRAM.md.
   const patternDiscovery = extraction.suggestedPatternType
     ? { suggestedPatternType: extraction.suggestedPatternType }
     : undefined;

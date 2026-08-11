@@ -7,9 +7,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { dirname, isAbsolute, resolve, sep } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectColorScheme } from "../color-scheme.js";
+import { assertCorpusImagePath, isWithin } from "../corpus-image-paths.js";
 import { buildColorSchemeAuditReport, type ColorSchemeAuditInput } from "../color-scheme-audit.js";
 
 type RawCorpusEntry = {
@@ -23,21 +24,10 @@ function sha256(bytes: Buffer | string): string {
 }
 
 function assertSafeImagePath(corpusRoot: string, imagePath: string): string {
-  const pathSegments = imagePath.split(/[\\/]/);
-  if (isAbsolute(imagePath) || pathSegments.some((segment) => segment === "." || segment === "..") || (!imagePath.startsWith("images-private/") && !imagePath.startsWith("images-public/"))) {
-    throw new Error(`unsafe corpus image path: ${imagePath}`);
-  }
-  const realCorpusRoot = realpathSync(corpusRoot);
-  const absoluteImagePath = resolve(corpusRoot, imagePath);
-  if (existsSync(absoluteImagePath)) {
-    const realImagePath = realpathSync(absoluteImagePath);
-    if (realImagePath !== realCorpusRoot && !realImagePath.startsWith(realCorpusRoot + sep)) throw new Error(`image path escapes corpus root: ${imagePath}`);
-  }
-  return absoluteImagePath;
-}
-
-function isWithin(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(root + sep);
+  // Shared guard: see src/corpus-image-paths.ts. `requireExists: false` keeps the
+  // audit's behaviour of tolerating a missing image here — the row is recorded as
+  // `missing-image` downstream rather than failing the whole run.
+  return assertCorpusImagePath(corpusRoot, imagePath, { requireExists: false, label: "corpus" });
 }
 
 function nearestExistingPath(path: string): string {

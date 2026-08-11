@@ -1,0 +1,140 @@
+#!/usr/bin/env node
+/**
+ * Build and evaluate the private human calibration packet for colorScheme.
+ * This command never mutates corpus/entries.json or any image.
+ */
+import { mkdirSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
+import { parseArgs } from "node:util";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { assertSafeOutputPath } from "./color-scheme-audit.js";
+import { assertCorpusImagePath, isWithin } from "../corpus-image-paths.js";
+import {
+  buildColorSchemeCalibrationPacket,
+  canonicalArtifactJson,
+  COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR,
+  ColorSchemeCalibrationPacketSchema,
+  evaluateColorSchemeCalibration,
+  ColorSchemeCalibrationSubmissionSchema,
+  sha256,
+  type ColorSchemeCalibrationPacket,
+} from "../color-scheme-calibration.js";
+import { validateColorSchemeAuditReport, type ColorSchemeAuditReport } from "../color-scheme-audit.js";
+
+type ParsedAudit = { audit: ColorSchemeAuditReport; auditSha256: string };
+
+function required(value: string | undefined, flag: string): string {
+  if (!value?.trim()) throw new Error(`${flag} is required`);
+  return value;
+}
+
+function readAudit(path: string): ParsedAudit {
+  const bytes = readFileSync(path);
+  const audit = validateColorSchemeAuditReport(JSON.parse(bytes.toString("utf8")) as unknown);
+  // Hash the canonical form of the parsed audit, not the raw bytes: the library
+  // re-derives this digest from the audit object, so the two must agree. For an
+  // audit written by `color-scheme-audit` the canonical form is the file bytes.
+  return { audit, auditSha256: sha256(canonicalArtifactJson(audit)) };
+}
+
+function imagePathFor(corpusRoot: string, relativePath: string): string {
+  return assertCorpusImagePath(corpusRoot, relativePath, { requireExists: true, label: "calibration" });
+}
+
+function assertPacketImagesCurrent(packet: ColorSchemeCalibrationPacket, corpusRoot: string): Map<string, string> {
+  const urls = new Map<string, string>();
+  for (const entry of packet.entries) {
+    const imagePath = imagePathFor(corpusRoot, entry.imagePath);
+    const actualHash = sha256(readFileSync(imagePath));
+    if (actualHash !== entry.imageSha256) throw new Error(`current image hash mismatch for ${entry.entryId}: expected ${entry.imageSha256}, got ${actualHash}`);
+    urls.set(entry.entryId, pathToFileURL(imagePath).href);
+  }
+  return urls;
+}
+
+function writePrivate(path: string, content: string, corpusRoot: string): string {
+  const absolute = assertSafeOutputPath(corpusRoot, path);
+  mkdirSync(dirname(absolute), { recursive: true });
+  // mkdirSync can create or follow a parent that was swapped for a symlink into
+  // the corpus after the check above, and `wx` does not help for a path that
+  // does not exist yet. Re-resolve the realised parent and re-check containment
+  // immediately before writing. This narrows the window rather than closing it;
+  // closing it needs openat-style APIs Node does not expose.
+  const realParent = realpathSync(dirname(absolute));
+  if (isWithin(realpathSync(corpusRoot), realParent)) {
+    throw new Error(`--out must be outside the corpus directory (resolved parent ${realParent})`);
+  }
+  writeFileSync(absolute, content, { flag: "wx" });
+  return absolute;
+}
+
+function parsePositiveInt(value: string | undefined, flag: string, fallback: number): number {
+  const parsed = value === undefined ? fallback : Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${flag} must be a positive integer`);
+  return parsed;
+}
+
+function parseUnitInterval(value: string | undefined, flag: string, fallback: number): number {
+  const parsed = value === undefined ? fallback : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) throw new Error(`${flag} must be between 0 and 1`);
+  return parsed;
+}
+
+async function main(): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args: process.argv.slice(2),
+    allowPositionals: true,
+    options: {
+      audit: { type: "string" },
+      corpus: { type: "string", default: "corpus/entries.json" },
+      json: { type: "string" },
+      html: { type: "string" },
+      size: { type: "string", default: "12" },
+      packet: { type: "string" },
+      submission: { type: "string" },
+      out: { type: "string" },
+      "minimum-labels": { type: "string", default: "12" },
+      "minimum-accuracy": { type: "string", default: "1" },
+    },
+  });
+  const mode = positionals[0];
+  if (mode !== "packet" && mode !== "evaluate") throw new Error("usage: color-scheme-calibrate packet|evaluate ...");
+  const corpusPath = resolve(values.corpus ?? "corpus/entries.json");
+  const corpusRoot = resolve(dirname(corpusPath));
+  const { audit, auditSha256 } = readAudit(resolve(required(values.audit, "--audit")));
+
+  if (mode === "packet") {
+    if (!values.json && !values.html) throw new Error("packet mode requires --json and/or --html");
+    const packet = buildColorSchemeCalibrationPacket(audit, auditSha256, parsePositiveInt(values.size, "--size", 12));
+    const imageUrls = assertPacketImagesCurrent(packet, corpusRoot);
+    if (values.json) writePrivate(values.json, canonicalArtifactJson(packet), corpusRoot);
+    if (values.html) {
+      const { buildColorSchemeCalibrationHtml } = await import("../color-scheme-calibration-html.js");
+      writePrivate(values.html, buildColorSchemeCalibrationHtml(packet, imageUrls), corpusRoot);
+    }
+    console.log(`calibration packet ready: ${packet.entries.length} entries, audit ${auditSha256}`);
+    return;
+  }
+
+  const packetPath = resolve(required(values.packet, "--packet"));
+  const submissionPath = resolve(required(values.submission, "--submission"));
+  const outPath = required(values.out, "--out");
+  const packet = ColorSchemeCalibrationPacketSchema.parse(JSON.parse(readFileSync(packetPath, "utf8")) as unknown);
+  const packetSha256 = sha256(canonicalArtifactJson(packet));
+  const submission = ColorSchemeCalibrationSubmissionSchema.parse(JSON.parse(readFileSync(submissionPath, "utf8")) as unknown);
+  assertPacketImagesCurrent(packet, corpusRoot);
+  const report = evaluateColorSchemeCalibration(audit, auditSha256, packet, submission, {
+    packetSha256,
+    minimumScoredLabels: parsePositiveInt(values["minimum-labels"], "--minimum-labels", 12),
+    minimumAccuracy: parseUnitInterval(values["minimum-accuracy"], "--minimum-accuracy", 1),
+  });
+  const written = writePrivate(outPath, canonicalArtifactJson(report), corpusRoot);
+  console.log(`calibration ${report.status} (promotion-eligible: ${report.promotionEligible ? "yes" : "no"}): ${written}`);
+  console.log(`selected=${report.counts.selected} scored=${report.counts.scored} correct=${report.counts.correct} incorrect=${report.counts.incorrect} abstained=${report.counts.abstained} accuracy=${report.accuracy ?? "n/a"}`);
+  if (!report.promotionEligible) {
+    console.log(`gate below the promotion floor (needs >= ${COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR.minimumScoredLabels} scored labels at accuracy >= ${COLOR_SCHEME_CALIBRATION_PROMOTION_FLOOR.minimumAccuracy}); this report cannot gate a corpus promotion`);
+  }
+}
+
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) main().catch((error: unknown) => { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; });

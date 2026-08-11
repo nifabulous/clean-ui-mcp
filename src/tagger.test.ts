@@ -670,6 +670,34 @@ describe("tagImage two-pass request shape", () => {
     await sharp({ create: { width: 200, height: 100, channels: 3, background: "#999999" } }).png().toFile(landscapeImage);
   });
 
+  it("keeps the model's colorScheme instead of stamping the luma detector's answer", async () => {
+    // A near-black canvas: color-scheme-v1 measures median luma ~0 and returns
+    // "dark". The model below returns "light". Human calibration on 12 real
+    // screenshots scored that detector 9/12 while a constant "light" scores
+    // 12/12 on the same labels, so the detector no longer overrides the model.
+    const darkImage = join(testDir, "dark-canvas.png");
+    await sharp({ create: { width: 200, height: 100, channels: 3, background: "#050505" } }).png().toFile(darkImage);
+    const { detectColorScheme } = await import("./color-scheme.js");
+    expect((await detectColorScheme(darkImage)).colorScheme).toBe("dark");
+
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async () => {
+      callCount++;
+      const response = callCount === 1
+        ? JSON.stringify({
+            patternType: "dashboard", categories: ["dashboard"], styleTags: ["minimal"],
+            components: ["sidebar-nav"], domainTags: [], colorScheme: "light",
+            dominantColors: ["#ffffff"], accentColor: null, spacingDensity: "moderate",
+            cornerStyle: "sharp", usesShadows: false, usesBorders: true,
+          })
+        : JSON.stringify({ critique: "x", whatToSteal: ["x"], antiPatterns: [], accessibilityRisks: [], qualityScore: 8, qualityTier: "exceptional" });
+      return new Response(JSON.stringify({ output_text: response }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const entry = await tagImage({ imagePath: darkImage, productName: "Test", url: null });
+    expect(entry.colorScheme).toBe("light");
+  });
+
   afterEach(() => {
     globalThis.fetch = originalFetch;
     for (const key of Object.keys(original) as Array<keyof typeof original>) {

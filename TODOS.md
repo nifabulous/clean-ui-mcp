@@ -669,8 +669,32 @@ decision. Preserve `conflict`, `abstain`, missing-image, and error rows as
 non-promotable; emit a draft promotion artifact for the existing review path.
 
 **Depends on / blocked by:** The runtime audit report schema and provenance in
-PR #107; a reviewed decision format. Never promote directly from detector
-output.
+PR #107, plus a private calibration report from `color-scheme-calibrate
+evaluate` whose `promotionEligible` field is `true`. Read that field, not
+`status`: `status` reflects whatever thresholds the caller configured, while
+`promotionEligible` is derived against the fixed promotion floor (12 scored
+labels at accuracy 1), so a deliberately lax run cannot be mistaken for a
+promotion-grade one. The calibration packet is human-filled and image-hash
+bound; even `promotionEligible: true` is necessary but not sufficient for
+promotion. Never promote directly from detector output.
+
+**Current status: blocked on the detector, not on the harness.** The first
+calibration run (2026-08-10, reviewer `Gold`, packet `1110270c94eb4f68...`)
+returned `status: fail`, `accuracy: 0.75`, `promotionEligible: false`, and all
+three disagreements were detector errors on review, not reviewer errors.
+`color-scheme-v1` reads a whole-frame median luma, so a light-mode screen behind
+a dark photographic modal classifies as `dark` (median luma 0.00 and 1.21), and
+white-on-saturated-blue classifies as `dark` (91.35). Both were outside the
+abstention band, so the detector was confident and wrong. A replacement estimator
+has to sample UI chrome rather than the whole frame and carry a chroma term. See
+`docs/RETAG_PROGRAM.md` for the full result, including why that packet also
+proves nothing about dark detection (every gold label was `light`). Note the
+sharper reading: because every gold label was `light`, a constant `return "light"`
+scores 12/12 against the detector's 9/12, so the run ranks the detector below a
+one-liner rather than establishing an accuracy for it. `src/tagger.ts` no longer
+stamps the detector's answer over the model's; that also closed an ungated
+citation path through `src/decision-lab.ts`, which cites `colorScheme` with no
+`isVerified` check.
 
 ---
 
